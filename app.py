@@ -252,6 +252,28 @@ def extract_listings(html, base_url):
         found.append({"id":lid,"title":title,"price":price,"area":area,"location":location,"url":href})
     return found
 
+def normalize_search_text(value):
+    """Normalize Persian/Arabic text for reliable neighborhood matching."""
+    text = normalize_digits(str(value or "")).strip().lower()
+    text = text.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    # Treat ZWNJ, tatweel and punctuation as separators, then collapse whitespace.
+    text = text.replace("\u0640", "")
+    text = re.sub(r"[\u200c\u200e\u200f\u202a-\u202e]", " ", text)
+    text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def contains_neighborhood(text, neighborhood):
+    """Match a complete normalized neighborhood phrase, not an arbitrary substring."""
+    haystack = normalize_search_text(text)
+    needle = normalize_search_text(neighborhood)
+    if not haystack or not needle:
+        return False
+    # Phrase boundaries prevent false positives such as matching a short district
+    # name inside an unrelated longer word.
+    return re.search(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", haystack, flags=re.UNICODE) is not None
+
+
 def matches(item, s):
     price_num = parse_price(item["price"])
     # Telegram posts with no readable price are allowed into a separate,
@@ -268,8 +290,11 @@ def matches(item, s):
         # Only filter if bedroom count is discernible from listing title/snippet.
         m = re.search(r"(\d+)\s*خواب", item["title"])
         if m and int(m.group(1)) != int(s["bedrooms"]): return False
-    neighborhoods = [x.strip() for x in s.get("neighborhoods","").split(",") if x.strip()]
-    if neighborhoods and not any(n in (item["title"]+" "+item["location"]) for n in neighborhoods): return False
+    neighborhoods = [x.strip() for x in re.split(r"[,،]", s.get("neighborhoods","")) if x.strip()]
+    # The posted location can differ from the property's actual neighborhood.
+    # Check both title and location, with Persian spelling/spacing normalization.
+    listing_text = " ".join((item.get("title", ""), item.get("location", "")))
+    if neighborhoods and not any(contains_neighborhood(listing_text, n) for n in neighborhoods): return False
     if s.get("parking") == "yes" and not re.search(r"پارکینگ", item["title"]): return False
     if s.get("parking") == "no" and re.search(r"پارکینگ", item["title"]): return False
     return True
