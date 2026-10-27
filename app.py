@@ -77,9 +77,16 @@ def money(value):
 
 def parse_price(text):
     if not text: return ""
-    t = text.replace(",", "").replace("٬", "").replace("تومان", "").strip()
-    m = re.search(r"\d[\d,]*", t)
-    return m.group(0).replace(",", "") if m else ""
+    t = normalize_digits(text).replace(",", "").replace("٬", "").replace("تومان", "").strip()
+    m = re.search(r"\d+(?:\.\d+)?", t)
+    if not m: return ""
+    try:
+        number = float(m.group(0))
+        if "میلیارد" in t: number *= 1_000_000_000
+        elif "میلیون" in t: number *= 1_000_000
+        return str(int(number))
+    except (TypeError, ValueError):
+        return ""
 
 def divar_search_api_url(search_url):
     """Translate a normal Divar search URL into the web-search JSON endpoint."""
