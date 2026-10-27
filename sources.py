@@ -106,6 +106,8 @@ class PublicTelegramSource:
         ]
         channels = list(dict.fromkeys(configured + seeds))
         output = []
+        self.channels_discovered = len(channels)
+        self.channels_scanned = 0
         headers = {"User-Agent": "Mozilla/5.0 (compatible; DivarFinder/1.0)", "Accept-Language": "fa,en;q=0.8"}
         # Discover additional public channel usernames from ordinary public search results.
         # This is best-effort and never bypasses login, private links, or anti-bot controls.
@@ -116,7 +118,7 @@ class PublicTelegramSource:
         ]
         for term in search_terms:
             try:
-                page = requests.get("https://www.google.com/search", params={"q": term, "num": "10"},
+                page = requests.get("https://www.google.com/search", params={"q": term, "num": "100"},
                                     headers=headers, timeout=12)
                 if page.status_code != 200:
                     continue
@@ -134,10 +136,14 @@ class PublicTelegramSource:
                             channels.append(channel)
             except Exception as exc:
                 print("Telegram channel discovery failed:", exc)
+        # Hard ceiling is 1000 public channels per run; the actual count depends on discovery results.
+        channels = channels[:1000]
+        self.channels_discovered = len(channels)
         for channel in channels:
             if not re.fullmatch(r"[A-Za-z0-9_]{5,64}", channel):
                 continue
             try:
+                self.channels_scanned += 1
                 response = requests.get(f"https://t.me/s/{channel}", headers=headers, timeout=15)
                 if response.status_code in (401, 403, 404, 429):
                     print(f"Telegram source @{channel}: HTTP {response.status_code}")
