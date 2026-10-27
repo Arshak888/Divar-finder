@@ -326,6 +326,22 @@ def main_keyboard():
          InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
     ])
 
+SHIRAZ_NEIGHBORHOODS = [
+    "معالی‌آباد", "قصرالدشت", "فرهنگ‌شهر", "عفیف‌آباد", "ستارخان",
+    "قدوسی غربی", "قدوسی شرقی", "زرگری", "چمران", "نیایش",
+    "ارم", "ملاصدرا", "رحمت‌آباد", "عادل‌آباد", "تاچارا",
+    "بلوار پاسداران", "بلوار مدرس", "بلوار رحمت", "بلوار عدالت", "بلوار امیرکبیر",
+    "شهرک گلستان", "شهرک صدرا", "شهرک پرواز", "شهرک بهار", "شهرک بزین",
+    "شهرک گلها", "شهرک والفجر", "شهرک سجادیه", "شهرک رضوان", "شهرک امام حسین",
+    "زرگون", "کوی وحدت", "کوی زهرا", "کوی آزادگان", "کوی طلاب",
+    "دروازه کازرون", "دروازه سعدی", "دروازه قرآن", "شاهچراغ", "لب آب",
+    "سنگ سیاه", "بازار وکیل", "سعدیه", "حافظیه", "اطلسی",
+    "پودنک", "سهل‌آباد", "دینکان", "کفترک", "سروستان",
+    "باغ حوض", "ابوذر", "فضیلت", "شریف‌آباد", "فرگاز",
+    "بلوار مدرس", "بلوار مدرس شمالی", "بلوار مدرس جنوبی", "بلوار استقلال", "بلوار جمهوری",
+    "بلوار چمران", "بلوار شهید بهشتی", "بلوار نصر", "بلوار رحمت جنوبی", "بلوار تخت جمشید",
+]
+
 def filters_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💰 حداقل قیمت", callback_data="edit_min_price"),
@@ -334,7 +350,7 @@ def filters_keyboard():
          InlineKeyboardButton("📐 حداکثر متراژ", callback_data="edit_max_area")],
         [InlineKeyboardButton("🛏 تعداد خواب", callback_data="choose_bedrooms"),
          InlineKeyboardButton("🚗 پارکینگ", callback_data="choose_parking")],
-        [InlineKeyboardButton("📍 محله‌ها", callback_data="edit_neighborhoods"),
+        [InlineKeyboardButton("📍 انتخاب محله‌ها ☑️", callback_data="neighborhoods_menu"),
          InlineKeyboardButton("⏱ فاصله بررسی", callback_data="edit_interval")],
         [InlineKeyboardButton("🧹 پاک‌کردن محدودیت متراژ", callback_data="clear_area")],
         [InlineKeyboardButton("⬅️ منوی اصلی", callback_data="menu_home")]
@@ -385,6 +401,36 @@ async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.effective_message.reply_text(filters_text(), reply_markup=filters_keyboard())
 
+def neighborhood_keyboard(page=0):
+    s = get_settings()
+    selected = {x.strip() for x in s.get("neighborhoods", "").split(",") if x.strip()}
+    per_page = 12
+    total_pages = (len(SHIRAZ_NEIGHBORHOODS) + per_page - 1) // per_page
+    page = max(0, min(int(page), total_pages - 1))
+    start = page * per_page
+    subset = SHIRAZ_NEIGHBORHOODS[start:start + per_page]
+    rows = []
+    for n in range(0, len(subset), 2):
+        row = []
+        for name in subset[n:n + 2]:
+            mark = "☑️" if name in selected else "⬜"
+            row.append(InlineKeyboardButton(f"{mark} {name}", callback_data="hood_toggle:" + str(SHIRAZ_NEIGHBORHOODS.index(name))))
+        rows.append(row)
+    nav = []
+    if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"hood_page:{page-1}"))
+    nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="hood_page_info"))
+    if page < total_pages - 1: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"hood_page:{page+1}"))
+    rows.append(nav)
+    rows.append([InlineKeyboardButton("✅ ثبت انتخاب‌ها", callback_data="hood_done"),
+                 InlineKeyboardButton("🧹 همه محله‌ها", callback_data="hood_clear")])
+    rows.append([InlineKeyboardButton("⬅️ بازگشت به فیلترها", callback_data="menu_filters")])
+    return InlineKeyboardMarkup(rows)
+
+def neighborhood_prompt(page=0):
+    selected = [x.strip() for x in get_settings().get("neighborhoods", "").split(",") if x.strip()]
+    summary = "، ".join(selected) if selected else "همه محله‌ها (بدون محدودیت)"
+    return f"📍 محله‌های شیراز\nبرای انتخاب چند محله، روی هرکدام بزن تا ☑️ شود.\nانتخاب‌شده: {summary[:500]}"
+
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not allowed(update):
@@ -422,6 +468,33 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         enabled = "0" if get_settings().get("enabled") == "1" else "1"
         set_settings({"enabled": enabled})
         await q.edit_message_text(("▶️ پایش فعال شد." if enabled == "1" else "⏸ پایش متوقف شد.") + "\n\n" + filters_text(), reply_markup=main_keyboard())
+    elif data == "neighborhoods_menu":
+        await q.edit_message_text(neighborhood_prompt(), reply_markup=neighborhood_keyboard(0))
+    elif data.startswith("hood_page:"):
+        page = int(data.split(":", 1)[1])
+        await q.edit_message_text(neighborhood_prompt(page), reply_markup=neighborhood_keyboard(page))
+    elif data == "hood_page_info":
+        await q.answer("برای رفتن بین صفحه‌ها از دکمه‌های قبلی و بعدی استفاده کن.")
+    elif data.startswith("hood_toggle:"):
+        try:
+            index = int(data.split(":", 1)[1])
+            name = SHIRAZ_NEIGHBORHOODS[index]
+        except (ValueError, IndexError):
+            await q.answer("این گزینه معتبر نیست.", show_alert=True)
+            return
+        selected = [x.strip() for x in get_settings().get("neighborhoods", "").split(",") if x.strip()]
+        if name in selected:
+            selected.remove(name)
+        else:
+            selected.append(name)
+        set_settings({"neighborhoods": ",".join(selected)})
+        page = index // 12
+        await q.edit_message_text(neighborhood_prompt(page), reply_markup=neighborhood_keyboard(page))
+    elif data == "hood_clear":
+        set_settings({"neighborhoods": ""})
+        await q.edit_message_text("همه محله‌ها انتخاب شدند، یعنی محدودیت محله خاموش است.\n" + neighborhood_prompt(), reply_markup=neighborhood_keyboard(0))
+    elif data == "hood_done":
+        await q.edit_message_text("✅ انتخاب محله‌ها ذخیره شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
     elif data == "clear_area":
         set_settings({"min_area": "", "max_area": ""})
         await q.edit_message_text("✅ محدودیت متراژ پاک شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
