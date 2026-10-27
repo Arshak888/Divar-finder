@@ -50,7 +50,10 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with db() as c:
         c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        c.execute("CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, title TEXT, price TEXT, area TEXT, location TEXT, url TEXT, seen_at TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, title TEXT, price TEXT, area TEXT, location TEXT, url TEXT, seen_at TEXT, created_at TEXT)")
+        columns = {row["name"] for row in c.execute("PRAGMA table_info(listings)")}
+        if "created_at" not in columns:
+            c.execute("ALTER TABLE listings ADD COLUMN created_at TEXT")
         c.execute("CREATE TABLE IF NOT EXISTS subscribers (chat_id TEXT PRIMARY KEY, created_at TEXT)")
         for k,v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k,v))
@@ -131,10 +134,28 @@ def _listing_from_widget(widget, base_url):
     location = str(web_info.get("district_persian") or web_info.get("district") or "").strip()
     if not location:
         location = str(data.get("bottom_description_text") or "").strip()
+    created_at = ""
+    for source in (data, web_info, payload_data):
+        for key in ("creation_date", "created_at", "published_at", "date"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if value not in (None, ""):
+                created_at = str(value).strip()
+                break
+        if created_at:
+            break
+    # Convert Unix timestamps to a readable local date when the source provides one.
+    if created_at.isdigit():
+        try:
+            stamp = int(created_at)
+            if stamp > 10_000_000_000: stamp //= 1000
+            created_at = datetime.fromtimestamp(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
+        except (ValueError, OSError, OverflowError):
+            pass
     return {
         "id": token, "title": title or "آگهی دیوار", "price": price,
         "area": area_match.group(1) if area_match else "",
-        "location": location[:100], "url": "https://divar.ir/v/" + token
+        "location": location[:100], "url": "https://divar.ir/v/" + token,
+        "created_at": created_at
     }
 
 
@@ -230,6 +251,7 @@ async def notify_new(item):
     with db() as c:
         chats = [r["chat_id"] for r in c.execute("SELECT chat_id FROM subscribers")]
     text = "🏠 آگهی جدید دیوار\n\n" + item["title"] + "\n"
+    if item.get("created_at"): text += "🗓 تاریخ ایجاد آگهی: " + item["created_at"] + "\n"
     if item["price"]: text += "💰 " + item["price"] + "\n"
     if item["area"]: text += "📐 " + item["area"] + " متر\n"
     if item["location"]: text += "📍 " + item["location"] + "\n"
@@ -280,6 +302,8 @@ def poll_once():
     print("Poll filters:", {k: s.get(k) for k in
           ("max_price", "min_price", "min_area", "max_area", "bedrooms", "parking", "neighborhoods", "enabled")})
     print(f"Poll: extracted={len(items)}; source=Divar")
+    # Process up to 100 cards when the fetched Divar response contains them.
+    items = items[:100]
     for sample in items[:8]:
         print("Poll sample:", repr(sample.get("title", "")[:70]),
               "price=", repr(sample.get("price", "")),
@@ -293,8 +317,8 @@ def poll_once():
         for item in items:
             if not matches(item,s): continue
             matched_count += 1
-            cur = c.execute("INSERT OR IGNORE INTO listings(id,title,price,area,location,url,seen_at) VALUES(?,?,?,?,?,?,?)",
-                (item["id"],item["title"],item["price"],item["area"],item["location"],item["url"],datetime.now(timezone.utc).isoformat()))
+            cur = c.execute("INSERT OR IGNORE INTO listings(id,title,price,area,location,url,seen_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (item["id"],item["title"],item["price"],item["area"],item["location"],item["url"],datetime.now(timezone.utc).isoformat(),item.get("created_at", "")))
             if cur.rowcount: new_items.append(item)
     print(f"Poll: matched={matched_count}; newly_saved={len(new_items)}")
     last_check = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -384,7 +408,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         await update.effective_message.reply_text("دسترسی ندارید. شناسه تلگرام خود را در پنل مدیر اضافه کنید."); return
-    with db() as c: rows = c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 10").fetchall()
+    with db() as c: rows = c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 100").fetchall()
     if not rows:
         await update.effective_message.reply_text("هنوز آگهی‌ای ثبت نشده. آدرس جست‌وجو و وضعیت جمع‌آوری را در پنل بررسی کن."); return
     for r in rows:
@@ -446,12 +470,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(filters_text(), reply_markup=filters_keyboard())
     elif data == "latest":
         with db() as c:
-            rows = c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 10").fetchall()
+            rows = c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 100").fetchall()
         if not rows:
             await q.message.reply_text("هنوز آگهی‌ای ثبت نشده است.", reply_markup=main_keyboard())
         else:
             for r in rows:
                 msg = "🏠 " + (r["title"] or "آگهی") + "\n"
+                if r["created_at"]: msg += "🗓 تاریخ ایجاد آگهی: " + r["created_at"] + "\n"
                 if r["price"]: msg += "💰 " + r["price"] + "\n"
                 if r["area"]: msg += "📐 " + r["area"] + " متر\n"
                 if r["location"]: msg += "📍 " + r["location"] + "\n"
