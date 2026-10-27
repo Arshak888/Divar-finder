@@ -463,6 +463,10 @@ def main_keyboard():
 # Set DIVAR_API_KEY to load the exact current district names/slugs from Divar.
 # The local fallback keeps the bot usable when the API key is not configured.
 SHIRAZ_NEIGHBORHOODS_FALLBACK = [
+    # Official Divar districts do not always include every commonly used local
+    # landmark/area label. Keep these aliases selectable as supplemental options.
+    "منطقه برنامه بودجه", "برنامه و بودجه", "برنامه بودجه",
+    "حسین الهاشمی", "حسین‌الهاشمی", "استانداری", "آفرینش",
     "معالی‌آباد", "قصرالدشت", "فرهنگ‌شهر", "عفیف‌آباد", "ستارخان",
     "قدوسی غربی", "قدوسی شرقی", "زرگری", "چمران", "نیایش",
     "ارم", "ملاصدرا", "رحمت‌آباد", "عادل‌آباد", "تاچارا",
@@ -510,9 +514,15 @@ def refresh_shiraz_neighborhoods(force=False):
             if display and display not in names:
                 names.append(display)
         if names:
-            SHIRAZ_NEIGHBORHOODS = names
+            # Merge, rather than replace, the official list: some commonly used
+            # local area names and landmarks are not exposed as official districts.
+            merged = list(names)
+            for fallback_name in SHIRAZ_NEIGHBORHOODS_FALLBACK:
+                if fallback_name not in merged:
+                    merged.append(fallback_name)
+            SHIRAZ_NEIGHBORHOODS = merged
             SHIRAZ_NEIGHBORHOODS_UPDATED_AT = now
-            print(f"Divar official districts loaded: {len(names)}")
+            print(f"Divar official districts loaded: {len(names)}; with local aliases: {len(merged)}")
         else:
             print("Divar district API returned no names; keeping fallback neighborhood list")
     except Exception as exc:
