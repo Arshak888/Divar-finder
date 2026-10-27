@@ -155,7 +155,26 @@ class PublicTelegramSource:
                     if not body:
                         continue
                     title = " ".join(body.stripped_strings).strip()
-                    if not title or not re.search(r"خانه|آپارتمان|ملک|فروش|خواب|متر|مسکونی", title):
+                    if not title:
+                        continue
+                    # Strict intent: for-sale only. Reject rent, deposit, lease and mortgage posts.
+                    rent_terms = r"اجاره|رهن|ودیعه|اجاره\s*ماهانه|رهن\s*کامل|رهن\s*و\s*اجاره|برای\s*اجاره|اجاره\s*داده\s*می‌شود"
+                    sale_terms = r"فروش|فروشی|خرید|قیمت\s*کل|قیمت\s*تومان|قابل\s*فروش"
+                    if re.search(rent_terms, title):
+                        continue
+                    if not re.search(sale_terms, title):
+                        continue
+                    # Exclude Sadra and other locations outside Shiraz. Require an explicit
+                    # Shiraz mention or a recognized Shiraz neighborhood in the post.
+                    shiraz_places = (
+                        "شیراز", "قصردشت", "معالی آباد", "معالی‌آباد", "عفیف آباد", "عفیف‌آباد",
+                        "فرهنگ شهر", "فرهنگ‌شهر", "قدوسی", "چمران", "زرگری", "ارم", "ستارخان",
+                        "قصرالدشت", "تاچارا", "کوی وحدت", "شهرک گلستان", "شهرک صدرا"
+                    )
+                    # Sadra is a separate city and must not pass as Shiraz.
+                    if re.search(r"صدرا|سعادت\s*شهر|مرودشت|کوار|زرقان|فسا|کازرون", title):
+                        continue
+                    if not any(place in title for place in shiraz_places):
                         continue
                     post_id = str(post.get("data-post") or "")
                     if "/" not in post_id:
@@ -166,10 +185,12 @@ class PublicTelegramSource:
                     price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|[\d۰-۹٠-٩]+(?:[.,٫]\d+)?\s*میلیارد)", title)
                     area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(title))
                     location_match = re.search(r"(?:محله|منطقه|محدوده)\s*[:：-]?\s*([^،\n]+)", title)
+                    inferred_location = location_match.group(1).strip() if location_match else next(
+                        (place for place in shiraz_places if place in title), "شیراز")
                     output.append(Listing(source="telegram", id=post_id, title=title[:500], url=url,
                         price=price_match.group(1) if price_match else "",
                         area=area_match.group(1) if area_match else "",
-                        location=location_match.group(1).strip() if location_match else channel,
+                        location=inferred_location,
                         created_at=created_at))
             except Exception as exc:
                 print(f"Telegram source @{channel} failed: {exc}")
