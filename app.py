@@ -254,11 +254,13 @@ def extract_listings(html, base_url):
 
 def matches(item, s):
     price_num = parse_price(item["price"])
-    # Enforce the budget strictly: unknown or negotiable prices cannot be
-    # confirmed to fit under the configured maximum.
-    if s.get("max_price") and not price_num: return False
-    if price_num and s.get("max_price") and int(price_num) > int(s["max_price"]): return False
-    if price_num and s.get("min_price") and int(price_num) < int(s["min_price"]): return False
+    # Telegram posts with no readable price are allowed into a separate,
+    # explicitly labelled "unknown price" category. They are NOT budget-confirmed.
+    unknown_telegram_price = (item.get("source") == "telegram" and not price_num)
+    if not unknown_telegram_price:
+        if s.get("max_price") and not price_num: return False
+        if price_num and s.get("max_price") and int(price_num) > int(s["max_price"]): return False
+        if price_num and s.get("min_price") and int(price_num) < int(s["min_price"]): return False
     area = int(item["area"]) if item["area"].isdigit() else None
     if area is not None and s.get("min_area") and area < int(s["min_area"]): return False
     if area is not None and s.get("max_area") and area > int(s["max_area"]): return False
@@ -276,11 +278,20 @@ async def notify_new(item):
     if not bot_app: return
     with db() as c:
         chats = [r["chat_id"] for r in c.execute("SELECT chat_id FROM subscribers")]
-    text = "🏠 آگهی جدید " + ("تلگرام" if item.get("source") == "telegram" else "دیوار") + "\n\n" + item["title"] + "\n"
-    text += "🗓 تاریخ ایجاد آگهی: " + (item.get("created_at") or "تاریخ دقیق در اطلاعات دریافتی دیوار موجود نیست") + "\n"
-    if item["price"]: text += "💰 " + item["price"] + "\n"
-    if item["area"]: text += "📐 " + item["area"] + " متر\n"
-    if item["location"]: text += "📍 " + item["location"] + "\n"
+    source = item.get("source", "")
+    price_num = parse_price(item.get("price", ""))
+    unknown_telegram_price = source == "telegram" and not price_num
+    if unknown_telegram_price:
+        text = "🟡 آگهی تلگرامی با قیمت نامشخص\n⚠️ تأیید نشده که زیر سقف بودجه شما باشد.\n\n"
+    else:
+        source_label = "تلگرام" if source == "telegram" else ("دیوار" if source == "divar" else source)
+        text = "🏠 آگهی جدید از " + source_label + "\n\n"
+    text += item["title"] + "\n"
+    text += "🗓 تاریخ ایجاد آگهی: " + (item.get("created_at") or "در اطلاعات دریافتی موجود نیست") + "\n"
+    if item.get("price"): text += "💰 " + item["price"] + "\n"
+    elif unknown_telegram_price: text += "💰 قیمت نامشخص\n"
+    if item.get("area"): text += "📐 " + item["area"] + " متر\n"
+    if item.get("location"): text += "📍 " + item["location"] + "\n"
     text += "\n🔗 " + item["url"]
     for chat in chats:
         try: await bot_app.bot.send_message(chat_id=chat, text=text, disable_web_page_preview=False)
