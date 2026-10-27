@@ -278,6 +278,12 @@ def poll_once():
     if not items:
         raise RuntimeError("صفحه جست‌وجوی دیوار دریافت شد، اما آگهی قابل استخراجی پیدا نشد؛ ساختار صفحه ممکن است تغییر کرده باشد.")
     print(f"Poll: extracted={len(items)}; max_price={s.get('max_price')}; source=Divar")
+    for sample in items[:5]:
+        print("Poll sample:", repr(sample.get("title", "")[:70]),
+              "price=", repr(sample.get("price", "")),
+              "parsed_price=", repr(parse_price(sample.get("price", ""))),
+              "area=", repr(sample.get("area", "")),
+              "location=", repr(sample.get("location", "")))
     new_items = []
     matched_count = 0
     with db() as c:
