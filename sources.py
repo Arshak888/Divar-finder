@@ -197,32 +197,46 @@ class PublicPropertySearchSource:
         output = []
         headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
                    "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.5"}
-        try:
-            response = requests.get("https://www.google.com/search",
-                params={"q": f"site:{self.domain} {self.search_query}", "num": "20"},
-                headers=headers, timeout=12)
-            if response.status_code != 200:
-                print(f"{self.source_name} discovery: HTTP {response.status_code}")
-                return output
-            soup = BeautifulSoup(response.text, "html.parser")
-            urls = []
-            for anchor in soup.select("a[href]"):
-                href = str(anchor.get("href", "")).strip()
-                parsed = urlparse(href)
-                if parsed.path == "/url":
-                    href = parse_qs(parsed.query).get("q", [""])[0]
-                href = unquote(href)
-                p = urlparse(href)
-                if p.scheme not in ("http", "https") or not p.netloc.lower().endswith(self.domain):
+        urls = []
+        query = f"site:{self.domain} {self.search_query}"
+        # Search engines may rate-limit server-side requests. Try ordinary public
+        # result pages in sequence; do not bypass CAPTCHAs, authentication, or blocks.
+        engines = [
+            ("Google", "https://www.google.com/search", {"q": query, "num": "20"}),
+            ("DuckDuckGo", "https://html.duckduckgo.com/html/", {"q": query}),
+            ("Bing", "https://www.bing.com/search", {"q": query, "count": "20"}),
+        ]
+        for engine_name, engine_url, params in engines:
+            try:
+                response = requests.get(engine_url, params=params, headers=headers, timeout=12)
+                if response.status_code != 200:
+                    print(f"{self.source_name} discovery via {engine_name}: HTTP {response.status_code}")
                     continue
-                if any(x in p.path.lower() for x in ("/login", "/register", "/search", "/contact", "/about")):
-                    continue
-                canonical = canonical_url(href)
-                if canonical and canonical not in urls:
-                    urls.append(canonical)
-                if len(urls) >= 8:
+                soup = BeautifulSoup(response.text, "html.parser")
+                before = len(urls)
+                for anchor in soup.select("a[href]"):
+                    href = str(anchor.get("href", "")).strip()
+                    parsed = urlparse(href)
+                    if parsed.path == "/url":
+                        href = parse_qs(parsed.query).get("q", [""])[0]
+                    href = unquote(href)
+                    p = urlparse(href)
+                    host = p.netloc.lower().split(":")[0]
+                    if p.scheme not in ("http", "https") or not (host == self.domain or host.endswith("." + self.domain)):
+                        continue
+                    if any(x in p.path.lower() for x in ("/login", "/register", "/search", "/contact", "/about")):
+                        continue
+                    canonical = canonical_url(href)
+                    if canonical and canonical not in urls:
+                        urls.append(canonical)
+                    if len(urls) >= 8:
+                        break
+                if len(urls) > before:
+                    print(f"{self.source_name} discovery via {engine_name}: candidate_pages={len(urls)}")
                     break
-            for url in urls:
+            except Exception as exc:
+                print(f"{self.source_name} discovery via {engine_name} failed: {exc}")
+        for url in urls:
                 try:
                     page = requests.get(url, headers=headers, timeout=10)
                     if page.status_code in (401, 403, 404, 429):
