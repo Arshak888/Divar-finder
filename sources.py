@@ -98,7 +98,13 @@ class PublicTelegramSource:
         import os
         import requests
         from bs4 import BeautifulSoup
-        channels = [x.strip().lstrip("@") for x in os.getenv("PUBLIC_TELEGRAM_CHANNELS", "").split(",") if x.strip()]
+        configured = [x.strip().lstrip("@") for x in os.getenv("PUBLIC_TELEGRAM_CHANNELS", "").split(",") if x.strip()]
+        # Known public real-estate Telegram sources discovered from public web listings.
+        seeds = [
+            "shirazamlak1400", "Villa_sadracity", "Moshaveramlakshiraz",
+            "Divar_shiiiraz", "Bazyar_Gem", "moshaverinmaskanshiraz"
+        ]
+        channels = list(dict.fromkeys(configured + seeds))
         output = []
         headers = {"User-Agent": "Mozilla/5.0 (compatible; DivarFinder/1.0)", "Accept-Language": "fa,en;q=0.8"}
         for channel in channels:
