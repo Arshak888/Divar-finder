@@ -421,25 +421,45 @@ def poll_once(force=False):
     enabled_sources = {x.strip().lower() for x in s.get("enabled_sources", DEFAULTS["enabled_sources"]).split(",") if x.strip()}
     if "divar" in enabled_sources:
         # First try the public search endpoint; some responses contain a blocking widget.
-        try:
-            api_url = divar_search_api_url(url)
-            items = fetch_divar_search_pages(api_url, url, headers, max_pages=4)
-        except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
-            print("Divar API search failed; falling back to HTML:", exc)
-            items = []
-        # The current website server-renders POST_ROW widgets into its HTML.
-        if not items:
+        # Search the configured sale category plus explicit pre-sale keyword searches.
+        # This helps catch pre-sale ads that are not surfaced by the generic sale feed.
+        search_urls = [url]
+        parsed_search = urlparse(url)
+        from urllib.parse import parse_qsl, urlencode, urlunparse
+        existing_query = dict(parse_qsl(parsed_search.query, keep_blank_values=True))
+        for keyword in ("پیش فروش", "پیش‌فروش", "پیش خرید"):
+            query_params = dict(existing_query)
+            query_params["query"] = keyword
+            variant = urlunparse(parsed_search._replace(query=urlencode(query_params)))
+            if variant not in search_urls:
+                search_urls.append(variant)
+        all_found, seen_ids = [], set()
+        for search_url in search_urls:
             try:
-                html_response = requests.get(url, headers=headers, timeout=25)
-                if html_response.status_code in (401, 403, 429):
-                    print(f"Divar source unavailable: HTTP {html_response.status_code}; continuing with other sources")
-                else:
-                    html_response.raise_for_status()
-                    items = extract_html_embedded_listings(html_response.text, url)
-                    if not items:
-                        items = extract_listings(html_response.text, url)
-            except Exception as exc:
-                print("Divar source failed; continuing with other sources:", exc)
+                api_url = divar_search_api_url(search_url)
+                found = fetch_divar_search_pages(api_url, search_url, headers, max_pages=3)
+            except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+                print("Divar API search failed; trying HTML fallback:", exc)
+                found = []
+            # HTML fallback is attempted independently for each keyword query.
+            if not found:
+                try:
+                    html_response = requests.get(search_url, headers=headers, timeout=25)
+                    if html_response.status_code in (401, 403, 429):
+                        print(f"Divar source unavailable: HTTP {html_response.status_code}; continuing")
+                    else:
+                        html_response.raise_for_status()
+                        found = extract_html_embedded_listings(html_response.text, search_url)
+                        if not found:
+                            found = extract_listings(html_response.text, search_url)
+                except Exception as exc:
+                    print("Divar source failed; continuing with other sources:", exc)
+            for item in found:
+                if item.get("id") not in seen_ids:
+                    seen_ids.add(item.get("id"))
+                    all_found.append(item)
+            print(f"Divar query {existing_query.get('query', '(base)') if search_url == url else dict(parse_qsl(urlparse(search_url).query)).get('query')!r}: {len(found)} listings")
+        items = all_found
         if not items:
             print("Divar source: listings_found=0; continuing with other sources")
     # Optional extra source: public Telegram channel previews configured by the operator.
