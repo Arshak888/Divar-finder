@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 load_dotenv()
 DB_PATH = os.getenv("DATABASE_PATH", "./divar.db")
@@ -315,13 +315,55 @@ def worker():
         except: delay = 20
         stop_event.wait(delay)
 
+def main_keyboard():
+    active = get_settings().get("enabled") == "1"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚙️ تنظیم فیلترها", callback_data="menu_filters"),
+         InlineKeyboardButton("📋 فیلترهای فعلی", callback_data="show_filters")],
+        [InlineKeyboardButton("🆕 آخرین آگهی‌ها", callback_data="latest"),
+         InlineKeyboardButton("🔎 بررسی همین الان", callback_data="check")],
+        [InlineKeyboardButton("⏸ توقف پایش" if active else "▶️ فعال‌کردن پایش", callback_data="toggle"),
+         InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
+    ])
+
+def filters_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 حداقل قیمت", callback_data="edit_min_price"),
+         InlineKeyboardButton("💰 حداکثر قیمت", callback_data="edit_max_price")],
+        [InlineKeyboardButton("📐 حداقل متراژ", callback_data="edit_min_area"),
+         InlineKeyboardButton("📐 حداکثر متراژ", callback_data="edit_max_area")],
+        [InlineKeyboardButton("🛏 تعداد خواب", callback_data="choose_bedrooms"),
+         InlineKeyboardButton("🚗 پارکینگ", callback_data="choose_parking")],
+        [InlineKeyboardButton("📍 محله‌ها", callback_data="edit_neighborhoods"),
+         InlineKeyboardButton("⏱ فاصله بررسی", callback_data="edit_interval")],
+        [InlineKeyboardButton("🧹 پاک‌کردن محدودیت متراژ", callback_data="clear_area")],
+        [InlineKeyboardButton("⬅️ منوی اصلی", callback_data="menu_home")]
+    ])
+
+def filters_text():
+    s = get_settings()
+    return ("⚙️ فیلترهای فعلی\n"
+        f"شهر: شیراز | نوع: خرید مسکونی\n"
+        f"حداکثر قیمت: {money(s.get('max_price')) if s.get('max_price') else 'بدون محدودیت'}\n"
+        f"حداقل قیمت: {money(s.get('min_price')) if s.get('min_price') else 'بدون محدودیت'}\n"
+        f"متراژ: {s.get('min_area') or 'بدون حداقل'} تا {s.get('max_area') or 'بدون حداکثر'} متر\n"
+        f"اتاق خواب: {s.get('bedrooms') or 'همه'}\n"
+        f"پارکینگ: { {'any':'مهم نیست','yes':'حتماً داشته باشد','no':'نداشته باشد'}.get(s.get('parking'),'مهم نیست')}\n"
+        f"محله‌ها: {s.get('neighborhoods') or 'همه محله‌ها'}\n"
+        f"فاصله بررسی: {s.get('interval')} ثانیه\n"
+        f"پایش: {'فعال ✅' if s.get('enabled') == '1' else 'متوقف ⏸'}")
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         await update.effective_message.reply_text("دسترسی ندارید. شناسه تلگرام خود را در پنل مدیر اضافه کنید.")
         return
     chat = str(update.effective_chat.id)
-    with db() as c: c.execute("INSERT OR IGNORE INTO subscribers(chat_id,created_at) VALUES(?,?)",(chat,datetime.now(timezone.utc).isoformat()))
-    await update.effective_message.reply_text("ربات جست‌وجوی خانه فعال شد 🏠\nآگهی‌های جدید به‌صورت خودکار برایت ارسال می‌شوند.\n/latest آخرین آگهی‌ها\n/filters فیلترهای فعلی\n/help راهنما")
+    with db() as c:
+        c.execute("INSERT OR IGNORE INTO subscribers(chat_id,created_at) VALUES(?,?)",
+                  (chat,datetime.now(timezone.utc).isoformat()))
+    await update.effective_message.reply_text(
+        "سلام! 🏠 به دیوار فایندر خوش اومدی.\nاز دکمه‌های زیر برای تنظیم فیلترها و مدیریت آگهی‌ها استفاده کن.",
+        reply_markup=main_keyboard())
 
 async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
@@ -338,17 +380,109 @@ async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(text, disable_web_page_preview=False)
 
 async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not allowed(update): await update.effective_message.reply_text("دسترسی ندارید."); return
-    s=get_settings()
-    await update.effective_message.reply_text(
-        "⚙️ فیلترهای فعلی\n"
-        f"شهر: شیراز\nحداکثر قیمت: {money(s.get('max_price'))}\n"
-        f"حداقل قیمت: {money(s.get('min_price')) if s.get('min_price') else 'بدون محدودیت'}\n"
-        f"متراژ: {s.get('min_area') or '—'} تا {s.get('max_area') or '—'} متر\n"
-        f"اتاق خواب: {s.get('bedrooms') or 'همه'}\n"
-        f"پارکینگ: { {'any':'مهم نیست','yes':'دارد','no':'ندارد'}.get(s.get('parking'),'مهم نیست')}\n"
-        f"محله‌ها: {s.get('neighborhoods') or 'همه'}\nفاصله بررسی: {s.get('interval')} ثانیه"
-    )
+    if not allowed(update):
+        await update.effective_message.reply_text("دسترسی ندارید.")
+        return
+    await update.effective_message.reply_text(filters_text(), reply_markup=filters_keyboard())
+
+async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not allowed(update):
+        await q.answer("دسترسی ندارید.", show_alert=True)
+        return
+    await q.answer()
+    data = q.data or ""
+    if data == "menu_home":
+        await q.edit_message_text("🏠 منوی اصلی دیوار فایندر", reply_markup=main_keyboard())
+    elif data == "menu_filters":
+        await q.edit_message_text("⚙️ تنظیم فیلترها\nیکی از گزینه‌ها را انتخاب کن:", reply_markup=filters_keyboard())
+    elif data == "show_filters":
+        await q.edit_message_text(filters_text(), reply_markup=filters_keyboard())
+    elif data == "latest":
+        with db() as c:
+            rows = c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 10").fetchall()
+        if not rows:
+            await q.message.reply_text("هنوز آگهی‌ای ثبت نشده است.", reply_markup=main_keyboard())
+        else:
+            for r in rows:
+                msg = "🏠 " + (r["title"] or "آگهی") + "\n"
+                if r["price"]: msg += "💰 " + r["price"] + "\n"
+                if r["area"]: msg += "📐 " + r["area"] + " متر\n"
+                if r["location"]: msg += "📍 " + r["location"] + "\n"
+                await q.message.reply_text(msg + "🔗 " + r["url"], disable_web_page_preview=False)
+            await q.message.reply_text("منوی اصلی:", reply_markup=main_keyboard())
+    elif data == "check":
+        await q.edit_message_text("🔎 دارم دیوار را بررسی می‌کنم...")
+        try:
+            await asyncio.to_thread(poll_once)
+            await q.message.reply_text("✅ بررسی تمام شد.\n" + filters_text(), reply_markup=main_keyboard())
+        except Exception as e:
+            await q.message.reply_text("❌ بررسی ناموفق بود: " + str(e), reply_markup=main_keyboard())
+    elif data == "toggle":
+        enabled = "0" if get_settings().get("enabled") == "1" else "1"
+        set_settings({"enabled": enabled})
+        await q.edit_message_text(("▶️ پایش فعال شد." if enabled == "1" else "⏸ پایش متوقف شد.") + "\n\n" + filters_text(), reply_markup=main_keyboard())
+    elif data == "clear_area":
+        set_settings({"min_area": "", "max_area": ""})
+        await q.edit_message_text("✅ محدودیت متراژ پاک شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
+    elif data == "choose_bedrooms":
+        await q.edit_message_text("تعداد اتاق خواب را انتخاب کن:", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("همه", callback_data="bedrooms_any"), InlineKeyboardButton("بدون خواب", callback_data="bedrooms_0")],
+            [InlineKeyboardButton("۱ خواب", callback_data="bedrooms_1"), InlineKeyboardButton("۲ خواب", callback_data="bedrooms_2")],
+            [InlineKeyboardButton("۳ خواب", callback_data="bedrooms_3"), InlineKeyboardButton("۴ خواب", callback_data="bedrooms_4")],
+            [InlineKeyboardButton("۵ خواب", callback_data="bedrooms_5"), InlineKeyboardButton("⬅️ بازگشت", callback_data="menu_filters")]
+        ]))
+    elif data.startswith("bedrooms_"):
+        val = data[len("bedrooms_"):]
+        set_settings({"bedrooms": "" if val == "any" else val})
+        await q.edit_message_text("✅ تعداد خواب ذخیره شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
+    elif data == "choose_parking":
+        await q.edit_message_text("وضعیت پارکینگ را انتخاب کن:", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("مهم نیست", callback_data="parking_any")],
+            [InlineKeyboardButton("حتماً پارکینگ داشته باشد", callback_data="parking_yes")],
+            [InlineKeyboardButton("بدون پارکینگ", callback_data="parking_no")],
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu_filters")]
+        ]))
+    elif data.startswith("parking_"):
+        set_settings({"parking": data[len("parking_"):]})
+        await q.edit_message_text("✅ فیلتر پارکینگ ذخیره شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
+    elif data.startswith("edit_"):
+        field = data[len("edit_"):]
+        labels = {"min_price":"حداقل قیمت به تومان", "max_price":"حداکثر قیمت به تومان",
+                  "min_area":"حداقل متراژ به متر", "max_area":"حداکثر متراژ به متر",
+                  "neighborhoods":"نام محله‌ها", "interval":"فاصله بررسی به ثانیه (۱۵ تا ۳۶۰۰)"}
+        if field in labels:
+            context.user_data["awaiting_filter"] = field
+            await q.message.reply_text(f"مقدار جدید {labels[field]} را بفرست. برای حذف این فیلتر «پاک» و برای لغو «لغو» را بفرست.")
+    elif data == "help":
+        await q.message.reply_text("🏠 راهنما\nاز «تنظیم فیلترها» برای تغییر قیمت، متراژ، خواب، پارکینگ و محله‌ها استفاده کن.\nدستورها: /start، /latest و /filters", reply_markup=main_keyboard())
+
+async def handle_filter_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update): return
+    field = context.user_data.get("awaiting_filter")
+    msg = update.effective_message
+    if not field or not msg or not msg.text: return
+    raw = msg.text.strip()
+    if raw.lower() in ("لغو", "cancel", "بیخیال", "بی‌خیال"):
+        context.user_data.pop("awaiting_filter", None)
+        await msg.reply_text("ویرایش لغو شد.", reply_markup=main_keyboard())
+        return
+    value = "" if raw.lower() in ("پاک", "حذف", "خالی", "clear", "-") else raw
+    if field in ("min_price", "max_price", "min_area", "max_area", "interval") and value:
+        digits = normalize_digits(value).replace(",", "").replace("٬", "").replace(" ", "")
+        if not digits.isdigit():
+            await msg.reply_text("لطفاً فقط عدد بفرست. برای لغو «لغو» را بفرست.")
+            return
+        number = int(digits)
+        if field == "interval" and not 15 <= number <= 3600:
+            await msg.reply_text("فاصله بررسی باید بین ۱۵ تا ۳۶۰۰ ثانیه باشد.")
+            return
+        value = str(number)
+    if field == "neighborhoods" and value:
+        value = ",".join(part.strip() for part in value.replace("،", ",").split(",") if part.strip())
+    set_settings({field: value})
+    context.user_data.pop("awaiting_filter", None)
+    await msg.reply_text("✅ فیلتر ذخیره شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("/start ثبت عضویت و دریافت آگهی جدید\n/latest آخرین ۱۰ آگهی\n/filters نمایش فیلترها\n/help راهنما")
@@ -364,6 +498,8 @@ def start_bot():
         bot_app.add_handler(CommandHandler("latest",cmd_latest))
         bot_app.add_handler(CommandHandler("filters",cmd_filters))
         bot_app.add_handler(CommandHandler("help",cmd_help))
+        bot_app.add_handler(CallbackQueryHandler(handle_button))
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_input))
         await bot_app.initialize()
         await bot_app.start()
         await bot_app.updater.start_polling(drop_pending_updates=False)
