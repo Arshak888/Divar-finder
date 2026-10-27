@@ -123,7 +123,7 @@ class PublicTelegramSource:
                 soup_results = BeautifulSoup(page.text, "html.parser")
                 for anchor in soup_results.select("a[href]"):
                     href = str(anchor.get("href", ""))
-                    match = re.search(r"(?:https?://)?(?:www\\.)?(?:t\\.me|telegram\\.me)/(?:s/)?([A-Za-z0-9_]{5,64})(?:[/?#]|$)", href)
+                    match = re.search(r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/(?:s/)?([A-Za-z0-9_]{5,64})(?:[/?#]|$)", href)
                     if match and match.group(1).lower() not in {"share", "proxy", "joinchat", "addstickers", "iv"}:
                         channel = match.group(1)
                         if channel not in channels:
