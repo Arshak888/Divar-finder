@@ -556,8 +556,8 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "check":
         await q.edit_message_text("🔎 دارم همه منابع را بررسی می‌کنم: دیوار، تلگرام، شیپور، کیلید، ایران‌فایل، ملک‌رادار و زومیلا...")
         try:
-            await asyncio.to_thread(poll_once)
-            await q.message.reply_text("✅ بررسی تمام شد.\n" + filters_text(), reply_markup=main_keyboard())
+            await asyncio.to_thread(poll_once, True)
+            await q.message.reply_text("✅ بررسی همه منابع تمام شد.\n" + filters_text(), reply_markup=main_keyboard())
         except Exception as e:
             await q.message.reply_text("❌ بررسی ناموفق بود: " + str(e), reply_markup=main_keyboard())
     elif data == "toggle":
