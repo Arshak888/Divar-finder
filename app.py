@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
-from sources import (PublicTelegramSource, SheypoorSource, KilidSource, IranfileSource, MelkRadarSource, ZoomilaSource)
+from sources import (PublicTelegramSource, SheypoorSource, KilidSource, IranfileSource, MelkRadarSource, ZoomilaSource, InstagramBusinessSource)
 
 load_dotenv()
 DB_PATH = os.getenv("DATABASE_PATH", "./divar.db")
@@ -25,7 +25,7 @@ DEFAULTS = {
     "search_url": "https://divar.ir/s/shiraz/buy-residential",
     "max_price": "11000000000", "min_price": "", "min_area": "", "max_area": "",
     "bedrooms": "", "parking": "any", "neighborhoods": "", "interval": "20",
-    "enabled": "1", "status": "هنوز بررسی نشده"
+    "enabled": "1", "enabled_sources": "divar,telegram,sheypoor,kilid,iranfile,melkradar,zoomila", "status": "هنوز بررسی نشده"
 }
 app = FastAPI(title="Divar Finder")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, https_only=BASE_URL.startswith("https://"), same_site="lax")
@@ -313,50 +313,63 @@ def poll_once(force=False):
         "Origin": "https://divar.ir",
     }
     items = []
-    # First try the public search endpoint; some responses contain a blocking widget.
-    try:
-        api_url = divar_search_api_url(url)
-        api_response = requests.get(api_url, headers=headers, timeout=20)
-        if api_response.status_code not in (401, 403, 429):
-            api_response.raise_for_status()
-            if "json" in api_response.headers.get("content-type", "").lower() or api_response.text.lstrip().startswith("{"):
-                try:
-                    items = extract_api_listings(api_response.json(), url)
-                except (ValueError, TypeError, AttributeError):
-                    items = []
-    except (requests.RequestException, ValueError):
-        items = []
-    # The current website server-renders POST_ROW widgets into its HTML.
-    if not items:
+    enabled_sources = {x.strip().lower() for x in s.get("enabled_sources", DEFAULTS["enabled_sources"]).split(",") if x.strip()}
+    if "divar" in enabled_sources:
+        # First try the public search endpoint; some responses contain a blocking widget.
         try:
-            html_response = requests.get(url, headers=headers, timeout=25)
-            if html_response.status_code in (401, 403, 429):
-                print(f"Divar source unavailable: HTTP {html_response.status_code}; continuing with other sources")
-            else:
-                html_response.raise_for_status()
-                items = extract_html_embedded_listings(html_response.text, url)
-                if not items:
-                    items = extract_listings(html_response.text, url)
-        except Exception as exc:
-            print("Divar source failed; continuing with other sources:", exc)
-    if not items:
-        print("Divar source: listings_found=0; continuing with other sources")
+            api_url = divar_search_api_url(url)
+            api_response = requests.get(api_url, headers=headers, timeout=20)
+            if api_response.status_code not in (401, 403, 429):
+                api_response.raise_for_status()
+                if "json" in api_response.headers.get("content-type", "").lower() or api_response.text.lstrip().startswith("{"):
+                    try:
+                        items = extract_api_listings(api_response.json(), url)
+                    except (ValueError, TypeError, AttributeError):
+                        items = []
+        except (requests.RequestException, ValueError):
+            items = []
+        # The current website server-renders POST_ROW widgets into its HTML.
+        if not items:
+            try:
+                html_response = requests.get(url, headers=headers, timeout=25)
+                if html_response.status_code in (401, 403, 429):
+                    print(f"Divar source unavailable: HTTP {html_response.status_code}; continuing with other sources")
+                else:
+                    html_response.raise_for_status()
+                    items = extract_html_embedded_listings(html_response.text, url)
+                    if not items:
+                        items = extract_listings(html_response.text, url)
+            except Exception as exc:
+                print("Divar source failed; continuing with other sources:", exc)
+        if not items:
+            print("Divar source: listings_found=0; continuing with other sources")
     # Optional extra source: public Telegram channel previews configured by the operator.
     # Failure of this source must never break the existing Divar poll.
-    telegram_items = []
-    try:
-        telegram_source = PublicTelegramSource()
-        telegram_items = [x.to_dict() for x in telegram_source.fetch(s)]
-        print(f"Telegram source: channels_scanned={getattr(telegram_source, 'channels_scanned', 'unknown')}; listings_found={len(telegram_items)}")
-        for item in telegram_items:
-            item["id"] = "telegram:" + item["id"]
-            item["source"] = "telegram"
-    except Exception as exc:
-        print("Telegram source failed; continuing with Divar only:", exc)
-    items.extend(telegram_items)
-    # Public web sources are isolated; failure or blocking on one site never stops others.
-    extra_sources = [SheypoorSource(), KilidSource(), IranfileSource(), MelkRadarSource(), ZoomilaSource()]
-    for source in extra_sources:
+    if "telegram" in enabled_sources:
+        try:
+            telegram_source = PublicTelegramSource()
+            telegram_items = [x.to_dict() for x in telegram_source.fetch(s)]
+            print(f"Telegram source: channels_scanned={getattr(telegram_source, 'channels_scanned', 'unknown')}; listings_found={len(telegram_items)}")
+            for item in telegram_items:
+                item["id"] = "telegram:" + item["id"]
+                item["source"] = "telegram"
+        except Exception as exc:
+            print("Telegram source failed; continuing with Divar only:", exc)
+
+    else:
+        print("Telegram source disabled in dashboard settings")
+    # Each source is independently switchable in the dashboard.
+    extra_sources = {
+        "sheypoor": SheypoorSource(),
+        "kilid": KilidSource(),
+        "iranfile": IranfileSource(),
+        "melkradar": MelkRadarSource(),
+        "zoomila": ZoomilaSource(),
+        "instagram": InstagramBusinessSource(),
+    }
+    for source_key, source in extra_sources.items():
+        if source_key not in enabled_sources:
+            continue
         try:
             found = [x.to_dict() for x in source.fetch(s)]
             for item in found:
@@ -728,6 +741,9 @@ def home(request: Request):
     <div class="card"><h2>تنظیمات جست‌وجو</h2><form method="post" action="/settings">
     <label>آدرس صفحه جست‌وجوی دیوار</label><input name="search_url" type="url" required value="{esc(s['search_url'])}" placeholder="https://divar.ir/s/...">
     <div class="grid"><div><label>حداقل قیمت (تومان)</label><input name="min_price" type="number" min="0" value="{esc(s['min_price'])}"></div><div><label>حداکثر قیمت (تومان)</label><input name="max_price" type="number" min="0" value="{esc(s['max_price'])}"></div><div><label>حداقل متراژ</label><input name="min_area" type="number" min="0" value="{esc(s['min_area'])}"></div><div><label>حداکثر متراژ</label><input name="max_area" type="number" min="0" value="{esc(s['max_area'])}"></div><div><label>تعداد اتاق خواب</label><select name="bedrooms"><option value="">همه</option>{''.join(f'<option value="{n}" {"selected" if s["bedrooms"]==str(n) else ""}>{n} اتاق</option>' for n in range(0,6))}</select></div><div><label>پارکینگ</label><select name="parking">{''.join(f'<option value="{v}" {"selected" if s["parking"]==v else ""}>{t}</option>' for v,t in [('any','مهم نیست'),('yes','حتماً داشته باشد'),('no','بدون پارکینگ')])}</select></div><div><label>فاصله بررسی (ثانیه، حداقل ۱۵)</label><input name="interval" type="number" min="15" max="3600" value="{esc(s['interval'])}"></div><div><label>پایش آگهی‌ها</label><select name="enabled"><option value="1" {"selected" if s["enabled"]=="1" else ""}>فعال</option><option value="0" {"selected" if s["enabled"]!="1" else ""}>متوقف</option></select></div></div>
+    <fieldset style="border:1px solid #ddd;border-radius:10px;padding:12px;margin:14px 0"><legend>منابع دریافت آگهی</legend><p class="muted">منابع موردنظر را انتخاب کن. این انتخاب فقط دریافت از منبع را روشن یا خاموش می‌کند.</p>
+    {''.join(f'<label style="display:inline-flex;align-items:center;gap:6px;margin:8px 14px 8px 0"><input type="checkbox" name="sources" value="{key}" {"checked" if key in set(s.get("enabled_sources", DEFAULTS["enabled_sources"]).split(",")) else ""} style="width:auto">{label}</label>' for key,label in [('divar','دیوار'),('telegram','کانال‌های عمومی تلگرام'),('sheypoor','شیپور'),('kilid','کیلید'),('iranfile','ایران‌فایل'),('melkradar','ملک‌رادار'),('zoomila','زومیلا'),('instagram','اینستاگرام (نیازمند API رسمی)')])}
+    </fieldset>
     <label>محله‌ها (با ویرگول جدا کن، خالی یعنی همه)</label><input name="neighborhoods" value="{esc(s['neighborhoods'])}" placeholder="مثلاً معالی‌آباد، قصرالدشت">
     <button type="submit">ذخیره تنظیمات</button></form></div>
     <div class="card"><div class="top"><h2>آخرین آگهی‌های ذخیره‌شده</h2><a href="/export">خروجی JSON</a></div>{listing_html}
@@ -754,12 +770,14 @@ def logout(request: Request):
     return RedirectResponse("/login",303)
 
 @app.post("/settings")
-def save_settings(request: Request, search_url: str = Form(...), min_price: str = Form(""), max_price: str = Form(""), min_area: str = Form(""), max_area: str = Form(""), bedrooms: str = Form(""), parking: str = Form("any"), interval: str = Form("20"), enabled: str = Form("1"), neighborhoods: str = Form("")):
+def save_settings(request: Request, search_url: str = Form(...), min_price: str = Form(""), max_price: str = Form(""), min_area: str = Form(""), max_area: str = Form(""), bedrooms: str = Form(""), parking: str = Form("any"), interval: str = Form("20"), enabled: str = Form("1"), neighborhoods: str = Form(""), sources: list[str] = Form([])):
     if not request.session.get("logged_in"): return RedirectResponse("/login",303)
     if not search_url.startswith("https://divar.ir/"): return PlainTextResponse("Only https://divar.ir/ search URLs are allowed.",400)
     try: interval=str(max(15,min(3600,int(interval))))
     except: interval="20"
-    vals={"search_url":search_url,"min_price":min_price,"max_price":max_price,"min_area":min_area,"max_area":max_area,"bedrooms":bedrooms,"parking":parking,"interval":interval,"enabled":"1" if enabled=="1" else "0","neighborhoods":neighborhoods}
+    valid_sources = {"divar","telegram","sheypoor","kilid","iranfile","melkradar","zoomila","instagram"}
+    chosen_sources = sorted(set(sources or []) & valid_sources)
+    vals={"search_url":search_url,"min_price":min_price,"max_price":max_price,"min_area":min_area,"max_area":max_area,"bedrooms":bedrooms,"parking":parking,"interval":interval,"enabled":"1" if enabled=="1" else "0","neighborhoods":neighborhoods,"enabled_sources":",".join(chosen_sources)}
     set_settings(vals)
     return RedirectResponse("/",303)
 
