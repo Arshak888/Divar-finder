@@ -384,7 +384,8 @@ def main_keyboard():
         [InlineKeyboardButton("🆕 آخرین آگهی‌ها", callback_data="latest"),
          InlineKeyboardButton("🔎 بررسی همین الان", callback_data="check")],
         [InlineKeyboardButton("⏸ توقف پایش" if active else "▶️ فعال‌کردن پایش", callback_data="toggle"),
-         InlineKeyboardButton("ℹ️ راهنما", callback_data="help")]
+         InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
+        [InlineKeyboardButton("🧹 پاک‌کردن حافظه آگهی‌ها", callback_data="clear_memory_confirm")]
     ])
 
 SHIRAZ_NEIGHBORHOODS = [
@@ -519,6 +520,21 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if r["location"]: msg += "📍 " + r["location"] + "\n"
                 await q.message.reply_text(msg + "🔗 " + r["url"], disable_web_page_preview=False)
             await q.message.reply_text("منوی اصلی:", reply_markup=main_keyboard())
+    elif data == "clear_memory_confirm":
+        await q.edit_message_text(
+            "🧹 پاک‌کردن حافظه آگهی‌ها؟\\n\\nتمام آگهی‌های ذخیره‌شده حذف می‌شوند و در بررسی‌های بعدی، آگهی‌های مطابق فیلتر فعلی دوباره قابل ثبت هستند. تنظیمات و اعضای ربات حذف نمی‌شوند.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑 بله، پاک کن", callback_data="clear_memory_yes"),
+                 InlineKeyboardButton("لغو", callback_data="clear_memory_cancel")]
+            ]))
+    elif data == "clear_memory_yes":
+        with db() as c:
+            deleted = c.execute("DELETE FROM listings").rowcount
+        await q.edit_message_text(
+            f"✅ حافظه آگهی‌ها پاک شد.\\nتعداد حذف‌شده: {deleted}\\nتنظیمات و عضویت‌ها دست‌نخورده باقی ماندند.",
+            reply_markup=main_keyboard())
+    elif data == "clear_memory_cancel":
+        await q.edit_message_text("عملیات پاک‌کردن لغو شد.", reply_markup=main_keyboard())
     elif data == "check":
         await q.edit_message_text("🔎 دارم دیوار را بررسی می‌کنم...")
         try:
@@ -685,7 +701,8 @@ def home(request: Request):
     <div class="grid"><div><label>حداقل قیمت (تومان)</label><input name="min_price" type="number" min="0" value="{esc(s['min_price'])}"></div><div><label>حداکثر قیمت (تومان)</label><input name="max_price" type="number" min="0" value="{esc(s['max_price'])}"></div><div><label>حداقل متراژ</label><input name="min_area" type="number" min="0" value="{esc(s['min_area'])}"></div><div><label>حداکثر متراژ</label><input name="max_area" type="number" min="0" value="{esc(s['max_area'])}"></div><div><label>تعداد اتاق خواب</label><select name="bedrooms"><option value="">همه</option>{''.join(f'<option value="{n}" {"selected" if s["bedrooms"]==str(n) else ""}>{n} اتاق</option>' for n in range(0,6))}</select></div><div><label>پارکینگ</label><select name="parking">{''.join(f'<option value="{v}" {"selected" if s["parking"]==v else ""}>{t}</option>' for v,t in [('any','مهم نیست'),('yes','حتماً داشته باشد'),('no','بدون پارکینگ')])}</select></div><div><label>فاصله بررسی (ثانیه، حداقل ۱۵)</label><input name="interval" type="number" min="15" max="3600" value="{esc(s['interval'])}"></div><div><label>پایش آگهی‌ها</label><select name="enabled"><option value="1" {"selected" if s["enabled"]=="1" else ""}>فعال</option><option value="0" {"selected" if s["enabled"]!="1" else ""}>متوقف</option></select></div></div>
     <label>محله‌ها (با ویرگول جدا کن، خالی یعنی همه)</label><input name="neighborhoods" value="{esc(s['neighborhoods'])}" placeholder="مثلاً معالی‌آباد، قصرالدشت">
     <button type="submit">ذخیره تنظیمات</button></form></div>
-    <div class="card"><div class="top"><h2>آخرین آگهی‌های ذخیره‌شده</h2><a href="/export">خروجی JSON</a></div>{listing_html}</div>
+    <div class="card"><div class="top"><h2>آخرین آگهی‌های ذخیره‌شده</h2><a href="/export">خروجی JSON</a></div>{listing_html}
+    <form method="post" action="/clear-memory" onsubmit="return confirm('همه آگهی‌های ذخیره‌شده پاک شوند؟ تنظیمات و کاربران تلگرام باقی می‌مانند.');"><button type="submit">🧹 پاک‌کردن حافظه آگهی‌ها</button></form></div>
     <div class="card"><h2>راه‌اندازی تلگرام</h2><p>به رباتت پیام <code>/start</code> بده تا عضو دریافت آگهی‌های جدید شوی. سپس <code>/latest</code> برای ۱۰ آگهی اخیر و <code>/filters</code> برای دیدن فیلترها.</p><p class="muted">اگر ربات پاسخ نمی‌دهد، BOT_TOKEN را در .env بررسی کن. شناسه عددی خودت را به ALLOWED_TELEGRAM_IDS اضافه کن و کانتینر را مجدداً راه‌اندازی کن.</p></div>"""
     return page(body)
 
@@ -724,6 +741,14 @@ def check_now(request: Request):
     except Exception as e:
         global last_error
         last_error=str(e)
+    return RedirectResponse("/",303)
+
+@app.post("/clear-memory")
+def clear_memory(request: Request):
+    if not request.session.get("logged_in"):
+        return RedirectResponse("/login",303)
+    with db() as c:
+        c.execute("DELETE FROM listings")
     return RedirectResponse("/",303)
 
 @app.get("/export")
