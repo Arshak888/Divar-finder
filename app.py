@@ -135,22 +135,47 @@ def _listing_from_widget(widget, base_url):
     if not location:
         location = str(data.get("bottom_description_text") or "").strip()
     created_at = ""
-    for source in (data, web_info, payload_data):
-        for key in ("creation_date", "created_at", "published_at", "date"):
-            value = source.get(key) if isinstance(source, dict) else None
-            if value not in (None, ""):
-                created_at = str(value).strip()
-                break
-        if created_at:
-            break
-    # Convert Unix timestamps to a readable local date when the source provides one.
-    if created_at.isdigit():
-        try:
-            stamp = int(created_at)
-            if stamp > 10_000_000_000: stamp //= 1000
-            created_at = datetime.fromtimestamp(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
-        except (ValueError, OSError, OverflowError):
-            pass
+    # Divar may expose a timestamp under nested metadata rather than at the card's top level.
+    def find_date_value(obj, depth=0):
+        if depth > 5 or not isinstance(obj, dict):
+            return ""
+        date_keys = ("creation_date", "created_at", "published_at", "publication_date",
+                     "post_date", "date_created", "date")
+        for key in date_keys:
+            value = obj.get(key)
+            if isinstance(value, (str, int, float)) and str(value).strip():
+                candidate = str(value).strip()
+                if re.search(r"\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{10,13}", normalize_digits(candidate)):
+                    return candidate
+        for value in obj.values():
+            if isinstance(value, dict):
+                result = find_date_value(value, depth + 1)
+                if result:
+                    return result
+        return ""
+    created_at = find_date_value(widget) or find_date_value(data) or find_date_value(payload_data)
+    # Normalize Unix timestamps and common ISO date strings.
+    if created_at:
+        normalized = normalize_digits(created_at)
+        if normalized.isdigit() and len(normalized) in (10, 13):
+            try:
+                stamp = int(normalized)
+                if len(normalized) == 13: stamp //= 1000
+                created_at = datetime.fromtimestamp(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OSError, OverflowError):
+                pass
+        else:
+            try:
+                parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+                if parsed.tzinfo is None: parsed = parsed.astimezone()
+                created_at = parsed.astimezone().strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                pass
+    # Fallback: extract Divar's relative publication age if shown in card text.
+    if not created_at:
+        age_match = re.search(r"(لحظاتی پیش|دقایقی پیش|\\d+\\s*(?:دقیقه|ساعت|روز|هفته|ماه)\\s*پیش|امروز|دیروز)", normalize_digits(raw_text))
+        if age_match:
+            created_at = "حدوداً " + age_match.group(1)
     return {
         "id": token, "title": title or "آگهی دیوار", "price": price,
         "area": area_match.group(1) if area_match else "",
@@ -251,7 +276,7 @@ async def notify_new(item):
     with db() as c:
         chats = [r["chat_id"] for r in c.execute("SELECT chat_id FROM subscribers")]
     text = "🏠 آگهی جدید دیوار\n\n" + item["title"] + "\n"
-    if item.get("created_at"): text += "🗓 تاریخ ایجاد آگهی: " + item["created_at"] + "\n"
+    text += "🗓 تاریخ ایجاد آگهی: " + (item.get("created_at") or "تاریخ دقیق در اطلاعات دریافتی دیوار موجود نیست") + "\n"
     if item["price"]: text += "💰 " + item["price"] + "\n"
     if item["area"]: text += "📐 " + item["area"] + " متر\n"
     if item["location"]: text += "📍 " + item["location"] + "\n"
@@ -476,7 +501,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             for r in rows:
                 msg = "🏠 " + (r["title"] or "آگهی") + "\n"
-                if r["created_at"]: msg += "🗓 تاریخ ایجاد آگهی: " + r["created_at"] + "\n"
+                msg += "🗓 تاریخ ایجاد آگهی: " + (r["created_at"] or "برای این آگهی ذخیره نشده؛ آگهی تازه‌ای را بررسی کن") + "\n"
                 if r["price"]: msg += "💰 " + r["price"] + "\n"
                 if r["area"]: msg += "📐 " + r["area"] + " متر\n"
                 if r["location"]: msg += "📍 " + r["location"] + "\n"
