@@ -266,9 +266,7 @@ class PublicPropertySearchSource:
                         location=location_match.group(1).strip()[:100] if location_match else "شیراز"))
                 except Exception as exc:
                     print(f"{self.source_name} listing fetch failed: {exc}")
-        except Exception as exc:
-            print(f"{self.source_name} discovery failed: {exc}")
-        print(f"Source {self.source_name}: candidate_pages={min(len(locals().get('urls', [])), 8)}; listings_found={len(output)}")
+        print(f"Source {self.source_name}: candidate_pages={min(len(urls), 8)}; listings_found={len(output)}")
         return output
 
 
