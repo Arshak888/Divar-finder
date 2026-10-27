@@ -358,6 +358,7 @@ def poll_once(force=False):
 
     else:
         print("Telegram source disabled in dashboard settings")
+    items.extend(telegram_items if "telegram" in enabled_sources else [])
     # Each source is independently switchable in the dashboard.
     extra_sources = {
         "sheypoor": SheypoorSource(),
