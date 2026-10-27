@@ -29,12 +29,12 @@ class Listing:
     def __post_init__(self):
         self.source = (self.source or "unknown").strip().lower()
         self.id = str(self.id or "").strip()
-        self.title = re.sub(r"\\s+", " ", str(self.title or "")).strip()
+        self.title = re.sub(r"\s+", " ", str(self.title or "")).strip()
         self.url = str(self.url or "").strip()
         self.price = str(self.price or "").strip()
         self.area = str(self.area or "").strip()
         self.bedrooms = str(self.bedrooms or "").strip()
-        self.location = re.sub(r"\\s+", " ", str(self.location or "")).strip()
+        self.location = re.sub(r"\s+", " ", str(self.location or "")).strip()
         self.created_at = str(self.created_at or "").strip()
         if not self.fingerprint:
             self.fingerprint = cross_source_fingerprint(self.title, self.price, self.area, self.location)
@@ -63,7 +63,7 @@ def canonical_url(url: str) -> str:
 
 def cross_source_fingerprint(title: str, price: str = "", area: str = "", location: str = "") -> str:
     """Conservative fingerprint. Similarity is a hint, not proof of identity."""
-    normalized = lambda value: re.sub(r"[^\\w\\d]", "", str(value or "").casefold())
+    normalized = lambda value: re.sub(r"[^\w\d]", "", str(value or "").casefold())
     material = "|".join(normalized(x) for x in (title, price, area, location))
     return sha256(material.encode("utf-8")).hexdigest()
 
