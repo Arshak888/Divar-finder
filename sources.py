@@ -333,3 +333,85 @@ class ZoomilaSource(PublicPropertySearchSource):
     source_name = "zoomila"
     domain = "zoomila.com"
     search_query = "property-for-sale/shiraz آپارتمان"
+
+
+class InstagramBusinessSource:
+    """Official Instagram Graph API adapter for configured public professional accounts.
+
+    Requires INSTAGRAM_ACCESS_TOKEN, INSTAGRAM_BUSINESS_ID, and
+    INSTAGRAM_PROPERTY_ACCOUNTS (comma-separated usernames). It does not scrape
+    Instagram HTML or bypass login/anti-bot controls.
+    """
+    key = "instagram"
+    source_name = "instagram"
+
+    def fetch(self, search_context: dict) -> list[Listing]:
+        import os
+        import requests
+
+        token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+        business_id = os.getenv("INSTAGRAM_BUSINESS_ID", "").strip()
+        accounts = [x.strip().lstrip("@") for x in
+                    os.getenv("INSTAGRAM_PROPERTY_ACCOUNTS", "").split(",") if x.strip()]
+        if not token or not business_id or not accounts:
+            print("Instagram source skipped: configure INSTAGRAM_ACCESS_TOKEN, INSTAGRAM_BUSINESS_ID, and INSTAGRAM_PROPERTY_ACCOUNTS in .env")
+            return []
+
+        api_version = os.getenv("INSTAGRAM_GRAPH_API_VERSION", "v23.0").strip()
+        endpoint = f"https://graph.facebook.com/{api_version}/{business_id}"
+        output = []
+        headers = {"Accept": "application/json"}
+        for username in accounts[:25]:
+            if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username):
+                print(f"Instagram source: invalid username skipped: {username!r}")
+                continue
+            try:
+                response = requests.get(endpoint, params={
+                    "fields": f"business_discovery.username({username}){{username,media.limit(50){{id,caption,permalink,timestamp,media_type}}}}",
+                    "access_token": token,
+                }, headers=headers, timeout=20)
+                if response.status_code != 200:
+                    try:
+                        detail = response.json().get("error", {}).get("message", response.text[:200])
+                    except Exception:
+                        detail = response.text[:200]
+                    print(f"Instagram source @{username}: Graph API HTTP {response.status_code}: {detail}")
+                    continue
+                payload = response.json()
+                discovery = payload.get("business_discovery") or {}
+                media = (discovery.get("media") or {}).get("data") or []
+                for post in media:
+                    caption = re.sub(r"\\s+", " ", str(post.get("caption") or "")).strip()
+                    if not caption:
+                        continue
+                    # Only Shiraz home-sale posts; reject rent and non-Shiraz locations.
+                    if not re.search(r"فروش|فروشی|خرید|قیمت\\s*کل|قابل\\s*فروش", caption):
+                        continue
+                    if re.search(r"اجاره|ودیعه|رهن\\s*و\\s*اجاره|رهن\\s*کامل|اجاره\\s*ماهانه", caption):
+                        continue
+                    if not re.search(r"شیراز|قصردشت|قصرالدشت|معالی[\\s‌]*آباد|عفیف[\\s‌]*آباد|فرهنگ[\\s‌]*شهر|قدوسی|چمران|زرگری|ستارخان|تاچارا", caption):
+                        continue
+                    if re.search(r"صدرا|سعادت\\s*شهر|مرودشت|کوار|زرقان|فسا|کازرون", caption):
+                        continue
+                    price_match = re.search(r"([\\d۰-۹٠-٩,.٬]+\\s*(?:میلیارد|میلیون)?\\s*تومان|[\\d۰-۹٠-٩]+(?:[.,٫]\\d+)?\\s*میلیارد)", caption)
+                    area_match = re.search(r"(\\d{2,4})\\s*متر", normalize_digits(caption))
+                    bedroom_match = re.search(r"(\\d)\\s*خواب", caption)
+                    post_id = str(post.get("id") or post.get("permalink") or "")
+                    permalink = str(post.get("permalink") or "").strip()
+                    if not permalink.startswith("https://www.instagram.com/"):
+                        continue
+                    output.append(Listing(
+                        source="instagram",
+                        id=post_id,
+                        title=caption[:500],
+                        url=permalink,
+                        price=price_match.group(1) if price_match else "",
+                        area=area_match.group(1) if area_match else "",
+                        bedrooms=bedroom_match.group(1) if bedroom_match else "",
+                        location="شیراز",
+                        created_at=str(post.get("timestamp") or "")
+                    ))
+                print(f"Instagram source @{username}: media_checked={len(media)}; listings_found={len(output)}")
+            except Exception as exc:
+                print(f"Instagram source @{username} failed: {exc}")
+        return output
