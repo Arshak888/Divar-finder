@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+from sources import PublicTelegramSource
 
 load_dotenv()
 DB_PATH = os.getenv("DATABASE_PATH", "./divar.db")
@@ -275,7 +276,7 @@ async def notify_new(item):
     if not bot_app: return
     with db() as c:
         chats = [r["chat_id"] for r in c.execute("SELECT chat_id FROM subscribers")]
-    text = "🏠 آگهی جدید دیوار\n\n" + item["title"] + "\n"
+    text = "🏠 آگهی جدید " + ("تلگرام" if item.get("source") == "telegram" else "دیوار") + "\n\n" + item["title"] + "\n"
     text += "🗓 تاریخ ایجاد آگهی: " + (item.get("created_at") or "تاریخ دقیق در اطلاعات دریافتی دیوار موجود نیست") + "\n"
     if item["price"]: text += "💰 " + item["price"] + "\n"
     if item["area"]: text += "📐 " + item["area"] + " متر\n"
@@ -324,6 +325,17 @@ def poll_once():
             items = extract_listings(html_response.text, url)
     if not items:
         raise RuntimeError("صفحه جست‌وجوی دیوار دریافت شد، اما آگهی قابل استخراجی پیدا نشد؛ ساختار صفحه ممکن است تغییر کرده باشد.")
+    # Optional extra source: public Telegram channel previews configured by the operator.
+    # Failure of this source must never break the existing Divar poll.
+    telegram_items = []
+    try:
+        telegram_items = [x.to_dict() for x in PublicTelegramSource().fetch(s)]
+        for item in telegram_items:
+            item["id"] = "telegram:" + item["id"]
+            item["source"] = "telegram"
+    except Exception as exc:
+        print("Telegram source failed; continuing with Divar only:", exc)
+    items.extend(telegram_items)
     print("Poll filters:", {k: s.get(k) for k in
           ("max_price", "min_price", "min_area", "max_area", "bedrooms", "parking", "neighborhoods", "enabled")})
     print(f"Poll: extracted={len(items)}; source=Divar")
