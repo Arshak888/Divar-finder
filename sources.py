@@ -381,21 +381,21 @@ class InstagramBusinessSource:
                 discovery = payload.get("business_discovery") or {}
                 media = (discovery.get("media") or {}).get("data") or []
                 for post in media:
-                    caption = re.sub(r"\\s+", " ", str(post.get("caption") or "")).strip()
+                    caption = re.sub(r"\s+", " ", str(post.get("caption") or "")).strip()
                     if not caption:
                         continue
                     # Only Shiraz home-sale posts; reject rent and non-Shiraz locations.
-                    if not re.search(r"فروش|فروشی|خرید|قیمت\\s*کل|قابل\\s*فروش", caption):
+                    if not re.search(r"فروش|فروشی|خرید|قیمت\s*کل|قابل\s*فروش", caption):
                         continue
-                    if re.search(r"اجاره|ودیعه|رهن\\s*و\\s*اجاره|رهن\\s*کامل|اجاره\\s*ماهانه", caption):
+                    if re.search(r"اجاره|ودیعه|رهن\s*و\s*اجاره|رهن\s*کامل|اجاره\s*ماهانه", caption):
                         continue
-                    if not re.search(r"شیراز|قصردشت|قصرالدشت|معالی[\\s‌]*آباد|عفیف[\\s‌]*آباد|فرهنگ[\\s‌]*شهر|قدوسی|چمران|زرگری|ستارخان|تاچارا", caption):
+                    if not re.search(r"شیراز|قصردشت|قصرالدشت|معالی[\s‌]*آباد|عفیف[\s‌]*آباد|فرهنگ[\s‌]*شهر|قدوسی|چمران|زرگری|ستارخان|تاچارا", caption):
                         continue
-                    if re.search(r"صدرا|سعادت\\s*شهر|مرودشت|کوار|زرقان|فسا|کازرون", caption):
+                    if re.search(r"صدرا|سعادت\s*شهر|مرودشت|کوار|زرقان|فسا|کازرون", caption):
                         continue
-                    price_match = re.search(r"([\\d۰-۹٠-٩,.٬]+\\s*(?:میلیارد|میلیون)?\\s*تومان|[\\d۰-۹٠-٩]+(?:[.,٫]\\d+)?\\s*میلیارد)", caption)
-                    area_match = re.search(r"(\\d{2,4})\\s*متر", normalize_digits(caption))
-                    bedroom_match = re.search(r"(\\d)\\s*خواب", caption)
+                    price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|[\d۰-۹٠-٩]+(?:[.,٫]\d+)?\s*میلیارد)", caption)
+                    area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(caption))
+                    bedroom_match = re.search(r"(\d)\s*خواب", caption)
                     post_id = str(post.get("id") or post.get("permalink") or "")
                     permalink = str(post.get("permalink") or "").strip()
                     if not permalink.startswith("https://www.instagram.com/"):
