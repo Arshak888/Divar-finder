@@ -107,6 +107,29 @@ class PublicTelegramSource:
         channels = list(dict.fromkeys(configured + seeds))
         output = []
         headers = {"User-Agent": "Mozilla/5.0 (compatible; DivarFinder/1.0)", "Accept-Language": "fa,en;q=0.8"}
+        # Discover additional public channel usernames from ordinary public search results.
+        # This is best-effort and never bypasses login, private links, or anti-bot controls.
+        search_terms = [
+            'site:t.me/s/ املاک شیراز فروش آپارتمان',
+            'site:telegram.me/s/ مشاور املاک شیراز خرید فروش',
+            'site:t.me/ شیراز املاک آپارتمان فروش'
+        ]
+        for term in search_terms:
+            try:
+                page = requests.get("https://www.google.com/search", params={"q": term, "num": "10"},
+                                    headers=headers, timeout=12)
+                if page.status_code != 200:
+                    continue
+                soup_results = BeautifulSoup(page.text, "html.parser")
+                for anchor in soup_results.select("a[href]"):
+                    href = str(anchor.get("href", ""))
+                    match = re.search(r"(?:https?://)?(?:www\\.)?(?:t\\.me|telegram\\.me)/(?:s/)?([A-Za-z0-9_]{5,64})(?:[/?#]|$)", href)
+                    if match and match.group(1).lower() not in {"share", "proxy", "joinchat", "addstickers", "iv"}:
+                        channel = match.group(1)
+                        if channel not in channels:
+                            channels.append(channel)
+            except Exception as exc:
+                print("Telegram channel discovery failed:", exc)
         for channel in channels:
             if not re.fullmatch(r"[A-Za-z0-9_]{5,64}", channel):
                 continue
