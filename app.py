@@ -432,7 +432,10 @@ def main_keyboard():
         [InlineKeyboardButton("🧹 پاک‌کردن حافظه آگهی‌ها", callback_data="clear_memory_confirm")]
     ])
 
-SHIRAZ_NEIGHBORHOODS = [
+# Official Divar neighborhood list (Kenar Open Platform API).
+# Set DIVAR_API_KEY to load the exact current district names/slugs from Divar.
+# The local fallback keeps the bot usable when the API key is not configured.
+SHIRAZ_NEIGHBORHOODS_FALLBACK = [
     "معالی‌آباد", "قصرالدشت", "فرهنگ‌شهر", "عفیف‌آباد", "ستارخان",
     "قدوسی غربی", "قدوسی شرقی", "زرگری", "چمران", "نیایش",
     "ارم", "ملاصدرا", "رحمت‌آباد", "عادل‌آباد", "تاچارا",
@@ -444,9 +447,46 @@ SHIRAZ_NEIGHBORHOODS = [
     "سنگ سیاه", "بازار وکیل", "سعدیه", "حافظیه", "اطلسی",
     "پودنک", "سهل‌آباد", "دینکان", "کفترک", "سروستان",
     "باغ حوض", "ابوذر", "فضیلت", "شریف‌آباد", "فرگاز",
-    "بلوار مدرس", "بلوار مدرس شمالی", "بلوار مدرس جنوبی", "بلوار استقلال", "بلوار جمهوری",
+    "بلوار مدرس شمالی", "بلوار مدرس جنوبی", "بلوار استقلال", "بلوار جمهوری",
     "بلوار چمران", "بلوار شهید بهشتی", "بلوار نصر", "بلوار رحمت جنوبی", "بلوار تخت جمشید",
 ]
+SHIRAZ_NEIGHBORHOODS = list(SHIRAZ_NEIGHBORHOODS_FALLBACK)
+SHIRAZ_NEIGHBORHOODS_UPDATED_AT = 0
+
+def refresh_shiraz_neighborhoods(force=False):
+    """Load Divar's own district labels; use fallback if the official API is unavailable."""
+    global SHIRAZ_NEIGHBORHOODS, SHIRAZ_NEIGHBORHOODS_UPDATED_AT
+    api_key = os.getenv("DIVAR_API_KEY", "").strip()
+    now = time.time()
+    if not api_key:
+        return SHIRAZ_NEIGHBORHOODS
+    if not force and SHIRAZ_NEIGHBORHOODS_UPDATED_AT and now - SHIRAZ_NEIGHBORHOODS_UPDATED_AT < 3600:
+        return SHIRAZ_NEIGHBORHOODS
+    try:
+        response = requests.get(
+            "https://open-api.divar.ir/v1/open-platform/assets/district/shiraz",
+            headers={"X-API-Key": api_key, "Accept": "application/json"},
+            timeout=12,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        districts = payload.get("districts", []) if isinstance(payload, dict) else []
+        names = []
+        for district in districts:
+            if not isinstance(district, dict):
+                continue
+            display = str(district.get("display") or "").strip()
+            if display and display not in names:
+                names.append(display)
+        if names:
+            SHIRAZ_NEIGHBORHOODS = names
+            SHIRAZ_NEIGHBORHOODS_UPDATED_AT = now
+            print(f"Divar official districts loaded: {len(names)}")
+        else:
+            print("Divar district API returned no names; keeping fallback neighborhood list")
+    except Exception as exc:
+        print(f"Divar official district API unavailable; using fallback list: {exc}")
+    return SHIRAZ_NEIGHBORHOODS
 
 SOURCE_LABELS = {
     "divar": "دیوار",
@@ -539,6 +579,7 @@ async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(filters_text(), reply_markup=filters_keyboard())
 
 def neighborhood_keyboard(page=0):
+    refresh_shiraz_neighborhoods()
     s = get_settings()
     selected = {x.strip() for x in s.get("neighborhoods", "").split(",") if x.strip()}
     per_page = 12
@@ -564,6 +605,7 @@ def neighborhood_keyboard(page=0):
     return InlineKeyboardMarkup(rows)
 
 def neighborhood_prompt(page=0):
+    refresh_shiraz_neighborhoods()
     selected = [x.strip() for x in get_settings().get("neighborhoods", "").split(",") if x.strip()]
     summary = "، ".join(selected) if selected else "همه محله‌ها (بدون محدودیت)"
     return f"📍 محله‌های شیراز\nبرای انتخاب چند محله، روی هرکدام بزن تا ☑️ شود.\nانتخاب‌شده: {summary[:500]}"
