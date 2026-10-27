@@ -88,3 +88,55 @@ def deduplicate(listings: Iterable[Listing]) -> list[Listing]:
         if enough_detail:
             seen_fingerprints.add(fp)
     return output
+
+
+class PublicTelegramSource:
+    """Read public Telegram channel preview pages (t.me/s/<channel>) only."""
+    key = "telegram"
+
+    def fetch(self, search_context: dict) -> list[Listing]:
+        import os
+        import requests
+        from bs4 import BeautifulSoup
+        channels = [x.strip().lstrip("@") for x in os.getenv("PUBLIC_TELEGRAM_CHANNELS", "").split(",") if x.strip()]
+        output = []
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; DivarFinder/1.0)", "Accept-Language": "fa,en;q=0.8"}
+        for channel in channels:
+            if not re.fullmatch(r"[A-Za-z0-9_]{5,64}", channel):
+                continue
+            try:
+                response = requests.get(f"https://t.me/s/{channel}", headers=headers, timeout=15)
+                if response.status_code in (401, 403, 404, 429):
+                    print(f"Telegram source @{channel}: HTTP {response.status_code}")
+                    continue
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, "html.parser")
+                for post in soup.select(".tgme_widget_message"):
+                    body = post.select_one(".tgme_widget_message_text")
+                    if not body:
+                        continue
+                    title = " ".join(body.stripped_strings).strip()
+                    if not title or not re.search(r"خانه|آپارتمان|ملک|فروش|خواب|متر|مسکونی", title):
+                        continue
+                    post_id = str(post.get("data-post") or "")
+                    if "/" not in post_id:
+                        continue
+                    url = "https://t.me/" + post_id
+                    dt = post.select_one("time[datetime]")
+                    created_at = str(dt.get("datetime", "")).strip() if dt else ""
+                    price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|\d+(?:\.\d+)?\s*میلیارد)", title)
+                    area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(title))
+                    location_match = re.search(r"(?:محله|منطقه|محدوده)\s*[:：-]?\s*([^،\n]+)", title)
+                    output.append(Listing(source="telegram", id=post_id, title=title[:500], url=url,
+                        price=price_match.group(1) if price_match else "",
+                        area=area_match.group(1) if area_match else "",
+                        location=location_match.group(1).strip() if location_match else channel,
+                        created_at=created_at))
+            except Exception as exc:
+                print(f"Telegram source @{channel} failed: {exc}")
+        return output
+
+
+def normalize_digits(value: str) -> str:
+    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    return str(value or "").translate(table)
