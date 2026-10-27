@@ -427,7 +427,7 @@ def poll_once(force=False):
         parsed_search = urlparse(url)
         from urllib.parse import parse_qsl, urlencode, urlunparse
         existing_query = dict(parse_qsl(parsed_search.query, keep_blank_values=True))
-        for keyword in ("پیش فروش", "پیش‌فروش", "پیش خرید"):
+        for keyword in ("پیش فروش", "پیش‌فروش", "پیش خرید", "باغ شهری", "باغشهری"):
             query_params = dict(existing_query)
             query_params["query"] = keyword
             variant = urlunparse(parsed_search._replace(query=urlencode(query_params)))
@@ -576,6 +576,9 @@ SHIRAZ_NEIGHBORHOODS_FALLBACK = [
     "باغ حوض", "ابوذر", "فضیلت", "شریف‌آباد", "فرگاز",
     "بلوار مدرس شمالی", "بلوار مدرس جنوبی", "بلوار استقلال", "بلوار جمهوری",
     "بلوار چمران", "بلوار شهید بهشتی", "بلوار نصر", "بلوار رحمت جنوبی", "بلوار تخت جمشید",
+    # Additional requested Shiraz area names and common spelling variants.
+    "سمیه", "ابولکلام", "ابوالکلام", "جاوید", "ابیوردی", "فرزانگان",
+    "چوگیا", "میرزای شیرازی", "فرمانداری", "تاچارا",
 ]
 SHIRAZ_NEIGHBORHOODS = list(SHIRAZ_NEIGHBORHOODS_FALLBACK)
 SHIRAZ_NEIGHBORHOODS_UPDATED_AT = 0
