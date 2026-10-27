@@ -185,22 +185,102 @@ def _listing_from_widget(widget, base_url):
     }
 
 
-def extract_api_listings(payload, base_url):
-    """Parse supported JSON response shapes returned by Divar."""
-    found, seen = [], set()
+def _api_post_rows(payload):
+    """Return POST_ROW widgets and pagination cursor from common Divar responses."""
     if not isinstance(payload, dict):
-        return found
+        return [], None
     widgets = payload.get("web_widgets", {})
     cards = widgets.get("post_list", []) if isinstance(widgets, dict) else []
     if not cards and isinstance(payload.get("widget_list"), list):
         cards = [w for w in payload["widget_list"]
                  if isinstance(w, dict) and w.get("widget_type") == "POST_ROW"]
+    if not cards and isinstance(payload.get("list_widgets"), list):
+        cards = [w for w in payload["list_widgets"]
+                 if isinstance(w, dict) and w.get("widget_type") == "POST_ROW"]
+    cursor = payload.get("last_post_date")
+    pagination = payload.get("pagination")
+    if not cursor and isinstance(pagination, dict):
+        cursor = pagination.get("data") or pagination.get("last_post_date")
+    if isinstance(cursor, dict):
+        cursor = cursor.get("last_post_date") or cursor.get("last-post-date")
+    return cards, cursor
+
+
+def extract_api_listings(payload, base_url):
+    """Parse supported JSON response shapes returned by Divar."""
+    cards, _ = _api_post_rows(payload)
+    found, seen = [], set()
     for card in cards:
         item = _listing_from_widget(card, base_url)
         if item and item["id"] not in seen:
             seen.add(item["id"])
             found.append(item)
     return found
+
+
+def fetch_divar_search_pages(api_url, search_url, headers, max_pages=4):
+    """Fetch a bounded number of Divar search pages using its last-post-date cursor.
+
+    The initial GET preserves the exact search URL and its filters. Further pages
+    are requested only when Divar supplies a cursor; if pagination is unsupported
+    for that response, we safely keep the first page.
+    """
+    parsed = urlparse(search_url)
+    parts = [part for part in parsed.path.split("/") if part]
+    category = parts[-1] if parts else ""
+    city_slug = parts[-2] if len(parts) >= 2 else ""
+    city_ids = {"shiraz": "5", "tehran": "1", "mashhad": "2", "isfahan": "3",
+                "karaj": "4", "tabriz": "6"}
+    items, seen = [], set()
+    response_payload = None
+    try:
+        first = requests.get(api_url, headers=headers, timeout=20)
+        if first.status_code not in (401, 403, 429):
+            first.raise_for_status()
+            if "json" in first.headers.get("content-type", "").lower() or first.text.lstrip().startswith("{"):
+                response_payload = first.json()
+    except (requests.RequestException, ValueError):
+        response_payload = None
+    if not isinstance(response_payload, dict):
+        return []
+    current_payload = response_payload
+    for page_number in range(1, max_pages + 1):
+        cards, cursor = _api_post_rows(current_payload)
+        for card in cards:
+            item = _listing_from_widget(card, search_url)
+            if item and item["id"] not in seen:
+                seen.add(item["id"])
+                items.append(item)
+        if page_number >= max_pages or not cards or not cursor:
+            break
+        # Divar's cursor endpoint accepts POST requests. Keep requests bounded and
+        # stop on any unexpected response instead of risking a polling failure.
+        body = {
+            "json_schema": {
+                "category": {"value": category},
+                "cities": [city_ids[city_slug]] if city_slug in city_ids else []
+            },
+            "last-post-date": cursor,
+            "page": page_number + 1
+        }
+        try:
+            time.sleep(0.7)
+            next_response = requests.post(api_url, headers={**headers, "Content-Type": "application/json"},
+                                          json=body, timeout=20)
+            if next_response.status_code in (401, 403, 429):
+                print(f"Divar pagination stopped: HTTP {next_response.status_code}")
+                break
+            next_response.raise_for_status()
+            next_payload = next_response.json()
+            next_cards, next_cursor = _api_post_rows(next_payload)
+            if not next_cards or not next_cursor or str(next_cursor) == str(cursor):
+                break
+            current_payload = next_payload
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            print("Divar pagination stopped safely:", exc)
+            break
+    print(f"Divar pagination: fetched {len(items)} unique listings across up to {max_pages} pages")
+    return items
 
 
 def extract_html_embedded_listings(source, base_url):
@@ -343,15 +423,9 @@ def poll_once(force=False):
         # First try the public search endpoint; some responses contain a blocking widget.
         try:
             api_url = divar_search_api_url(url)
-            api_response = requests.get(api_url, headers=headers, timeout=20)
-            if api_response.status_code not in (401, 403, 429):
-                api_response.raise_for_status()
-                if "json" in api_response.headers.get("content-type", "").lower() or api_response.text.lstrip().startswith("{"):
-                    try:
-                        items = extract_api_listings(api_response.json(), url)
-                    except (ValueError, TypeError, AttributeError):
-                        items = []
-        except (requests.RequestException, ValueError):
+            items = fetch_divar_search_pages(api_url, url, headers, max_pages=4)
+        except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+            print("Divar API search failed; falling back to HTML:", exc)
             items = []
         # The current website server-renders POST_ROW widgets into its HTML.
         if not items:
