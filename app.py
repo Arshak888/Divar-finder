@@ -163,12 +163,16 @@ def extract_html_embedded_listings(source, base_url):
     decoder = json.JSONDecoder()
     found, seen = [], set()
     for match in re.finditer(r'"widget_type"\s*:\s*"POST_ROW"', source):
-        start = match.start() - 1
-        if start < 0 or source[start] != "{":
+        # widget_type is usually not the first key, so the opening brace is
+        # earlier than the character immediately before this match.
+        start = source.rfind("{", 0, match.start())
+        if start < 0:
             continue
         try:
             widget, _ = decoder.raw_decode(source[start:])
         except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(widget, dict) or widget.get("widget_type") != "POST_ROW":
             continue
         item = _listing_from_widget(widget, base_url)
         if item and item["id"] not in seen:
@@ -203,7 +207,9 @@ def extract_listings(html, base_url):
 
 def matches(item, s):
     price_num = parse_price(item["price"])
-    # Text price extraction can be incomplete; don't discard listing solely on unknown price.
+    # Enforce the budget strictly: unknown or negotiable prices cannot be
+    # confirmed to fit under the configured maximum.
+    if s.get("max_price") and not price_num: return False
     if price_num and s.get("max_price") and int(price_num) > int(s["max_price"]): return False
     if price_num and s.get("min_price") and int(price_num) < int(s["min_price"]): return False
     area = int(item["area"]) if item["area"].isdigit() else None
@@ -271,13 +277,17 @@ def poll_once():
             items = extract_listings(html_response.text, url)
     if not items:
         raise RuntimeError("صفحه جست‌وجوی دیوار دریافت شد، اما آگهی قابل استخراجی پیدا نشد؛ ساختار صفحه ممکن است تغییر کرده باشد.")
+    print(f"Poll: extracted={len(items)}; max_price={s.get('max_price')}; source=Divar")
     new_items = []
+    matched_count = 0
     with db() as c:
         for item in items:
             if not matches(item,s): continue
+            matched_count += 1
             cur = c.execute("INSERT OR IGNORE INTO listings(id,title,price,area,location,url,seen_at) VALUES(?,?,?,?,?,?,?)",
                 (item["id"],item["title"],item["price"],item["area"],item["location"],item["url"],datetime.now(timezone.utc).isoformat()))
             if cur.rowcount: new_items.append(item)
+    print(f"Poll: matched={matched_count}; newly_saved={len(new_items)}")
     last_check = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
     last_error = ""
     if new_items and bot_loop and bot_loop.is_running():
