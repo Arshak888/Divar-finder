@@ -272,7 +272,16 @@ class PublicPropertySearchSource:
                     if len(title) < 8:
                         title = body[:180]
                     searchable = (title + " " + body[:12000])
-                    if not re.search(r"شیراز|فارس", searchable) or not re.search(r"فروش|خرید|آپارتمان|خانه|ویلا|ملک", searchable):
+                    # Keep these adapters aligned with the user's intent: Shiraz city,
+                    # residential sale listings only. Do not mistake rent/deposit values
+                    # for purchase prices.
+                    if not re.search(r"شیراز", searchable):
+                        continue
+                    if re.search(r"اجاره|رهن\s*و\s*اجاره|ودیعه|رهن\s*کامل|اجاره\s*ماهانه", title):
+                        continue
+                    if not re.search(r"فروش|فروشی|خرید|قیمت\s*کل", title):
+                        continue
+                    if re.search(r"مرودشت|کوار|زرقان|فسا|کازرون|صدرا", title):
                         continue
                     price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|[\d۰-۹٠-٩,.٬]+\s*میلیارد)", searchable)
                     area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(searchable))
