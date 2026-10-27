@@ -179,3 +179,115 @@ class PublicTelegramSource:
 def normalize_digits(value: str) -> str:
     table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
     return str(value or "").translate(table)
+
+
+class PublicPropertySearchSource:
+    """Best-effort adapter for public, search-engine-indexed property listings.
+    It never logs in or bypasses site restrictions. Each source is isolated so
+    a blocked site does not stop the other sources.
+    """
+    key = "property-search"
+    source_name = "property"
+    domain = ""
+    search_query = ""
+
+    def fetch(self, search_context: dict) -> list[Listing]:
+        import requests
+        from bs4 import BeautifulSoup
+        output = []
+        headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+                   "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.5"}
+        try:
+            response = requests.get("https://www.google.com/search",
+                params={"q": f"site:{self.domain} {self.search_query}", "num": "20"},
+                headers=headers, timeout=12)
+            if response.status_code != 200:
+                print(f"{self.source_name} discovery: HTTP {response.status_code}")
+                return output
+            soup = BeautifulSoup(response.text, "html.parser")
+            urls = []
+            for anchor in soup.select("a[href]"):
+                href = str(anchor.get("href", "")).strip()
+                parsed = urlparse(href)
+                if parsed.path == "/url":
+                    href = parse_qs(parsed.query).get("q", [""])[0]
+                href = unquote(href)
+                p = urlparse(href)
+                if p.scheme not in ("http", "https") or not p.netloc.lower().endswith(self.domain):
+                    continue
+                if any(x in p.path.lower() for x in ("/login", "/register", "/search", "/contact", "/about")):
+                    continue
+                canonical = canonical_url(href)
+                if canonical and canonical not in urls:
+                    urls.append(canonical)
+                if len(urls) >= 8:
+                    break
+            for url in urls:
+                try:
+                    page = requests.get(url, headers=headers, timeout=10)
+                    if page.status_code in (401, 403, 404, 429):
+                        continue
+                    page.raise_for_status()
+                    detail = BeautifulSoup(page.text, "html.parser")
+                    for node in detail.select("script,style,nav,footer,header"):
+                        node.decompose()
+                    title_node = detail.find("h1") or detail.find("title")
+                    title = " ".join(title_node.stripped_strings) if title_node else ""
+                    body = " ".join(detail.stripped_strings)
+                    if len(title) < 8:
+                        title = body[:180]
+                    searchable = (title + " " + body[:12000])
+                    if not re.search(r"شیراز|فارس", searchable) or not re.search(r"فروش|خرید|آپارتمان|خانه|ویلا|ملک", searchable):
+                        continue
+                    price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|[\d۰-۹٠-٩,.٬]+\s*میلیارد)", searchable)
+                    area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(searchable))
+                    bedroom_match = re.search(r"(\d)\s*خواب", title)
+                    location_match = re.search(r"(?:محله|محدوده|منطقه)\s*[:：-]?\s*([^،؛|]+)", title)
+                    identifier = hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
+                    output.append(Listing(source=self.source_name, id=identifier,
+                        title=title[:300], url=url,
+                        price=price_match.group(1) if price_match else "",
+                        area=area_match.group(1) if area_match else "",
+                        bedrooms=bedroom_match.group(1) if bedroom_match else "",
+                        location=location_match.group(1).strip()[:100] if location_match else "شیراز"))
+                except Exception as exc:
+                    print(f"{self.source_name} listing fetch failed: {exc}")
+        except Exception as exc:
+            print(f"{self.source_name} discovery failed: {exc}")
+        print(f"Source {self.source_name}: candidate_pages={min(len(locals().get('urls', [])), 8)}; listings_found={len(output)}")
+        return output
+
+
+class SheypoorSource(PublicPropertySearchSource):
+    key = "sheypoor"
+    source_name = "sheypoor"
+    domain = "sheypoor.com"
+    search_query = "خرید آپارتمان فروش خانه شیراز"
+
+
+class KilidSource(PublicPropertySearchSource):
+    key = "kilid"
+    source_name = "kilid"
+    domain = "kilid.com"
+    search_query = "خرید آپارتمان شیراز"
+
+
+class IranfileSource(PublicPropertySearchSource):
+    key = "iranfile"
+    source_name = "iranfile"
+    domain = "iranfile.ir"
+    search_query = "خرید آپارتمان شیراز"
+
+
+class MelkRadarSource(PublicPropertySearchSource):
+    key = "melkradar"
+    source_name = "melkradar"
+    domain = "melkradar.com"
+    search_query = "شیراز فروش آپارتمان"
+
+
+class ZoomilaSource(PublicPropertySearchSource):
+    key = "zoomila"
+    source_name = "zoomila"
+    domain = "zoomila.com"
+    search_query = "property-for-sale/shiraz آپارتمان"
