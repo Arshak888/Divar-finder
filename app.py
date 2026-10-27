@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from starlette.middleware.sessions import SessionMiddleware
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
-from sources import PublicTelegramSource
+from sources import (PublicTelegramSource, SheypoorSource, KilidSource, IranfileSource, MelkRadarSource, ZoomilaSource)
 
 load_dotenv()
 DB_PATH = os.getenv("DATABASE_PATH", "./divar.db")
@@ -338,9 +338,20 @@ def poll_once():
     except Exception as exc:
         print("Telegram source failed; continuing with Divar only:", exc)
     items.extend(telegram_items)
+    # Public web sources are isolated; failure or blocking on one site never stops others.
+    extra_sources = [SheypoorSource(), KilidSource(), IranfileSource(), MelkRadarSource(), ZoomilaSource()]
+    for source in extra_sources:
+        try:
+            found = [x.to_dict() for x in source.fetch(s)]
+            for item in found:
+                item["id"] = source.key + ":" + item["id"]
+                item["source"] = source.key
+            items.extend(found)
+        except Exception as exc:
+            print(f"Source {source.key} failed; continuing:", exc)
     print("Poll filters:", {k: s.get(k) for k in
           ("max_price", "min_price", "min_area", "max_area", "bedrooms", "parking", "neighborhoods", "enabled")})
-    print(f"Poll: extracted={len(items)}; cap=1000; sources=Divar+public-Telegram")
+    print(f"Poll: extracted={len(items)}; cap=1000; sources=Divar+public-Telegram+Sheypoor+Kilid+Iranfile+MelkRadar+Zoomila")
     # Process up to 1000 listings when the source actually returns them.
     items = items[:1000]
     for sample in items[:8]:
