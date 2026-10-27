@@ -427,7 +427,8 @@ def main_keyboard():
         [InlineKeyboardButton("🆕 آخرین آگهی‌ها", callback_data="latest"),
          InlineKeyboardButton("🔎 بررسی همین الان", callback_data="check")],
         [InlineKeyboardButton("⏸ توقف پایش" if active else "▶️ فعال‌کردن پایش", callback_data="toggle"),
-         InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
+         InlineKeyboardButton("📡 منابع آگهی", callback_data="menu_sources")],
+        [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
         [InlineKeyboardButton("🧹 پاک‌کردن حافظه آگهی‌ها", callback_data="clear_memory_confirm")]
     ])
 
@@ -446,6 +447,37 @@ SHIRAZ_NEIGHBORHOODS = [
     "بلوار مدرس", "بلوار مدرس شمالی", "بلوار مدرس جنوبی", "بلوار استقلال", "بلوار جمهوری",
     "بلوار چمران", "بلوار شهید بهشتی", "بلوار نصر", "بلوار رحمت جنوبی", "بلوار تخت جمشید",
 ]
+
+SOURCE_LABELS = {
+    "divar": "دیوار",
+    "telegram": "کانال‌های عمومی تلگرام",
+    "sheypoor": "شیپور",
+    "kilid": "کیلید",
+    "iranfile": "ایران‌فایل",
+    "melkradar": "ملک‌رادار",
+    "zoomila": "زومیلا",
+    "instagram": "اینستاگرام (API رسمی)",
+}
+
+def sources_keyboard():
+    settings = get_settings()
+    enabled = {x.strip() for x in settings.get("enabled_sources", DEFAULTS["enabled_sources"]).split(",") if x.strip()}
+    rows = []
+    for key, label in SOURCE_LABELS.items():
+        mark = "🟢" if key in enabled else "⚪"
+        rows.append([InlineKeyboardButton(f"{mark} {label}", callback_data=f"source_toggle:{key}")])
+    rows.append([InlineKeyboardButton("⬅️ منوی اصلی", callback_data="menu_home")])
+    return InlineKeyboardMarkup(rows)
+
+def sources_text():
+    settings = get_settings()
+    enabled = {x.strip() for x in settings.get("enabled_sources", DEFAULTS["enabled_sources"]).split(",") if x.strip()}
+    lines = ["📡 مدیریت منابع دریافت آگهی", "با زدن هر دکمه، همان منبع روشن یا خاموش می‌شود.", ""]
+    for key, label in SOURCE_LABELS.items():
+        state = "فعال ✅" if key in enabled else "خاموش ⚪"
+        lines.append(f"{label}: {state}")
+    lines += ["", "نکته: اینستاگرام به توکن و دسترسی معتبر Meta Graph API نیاز دارد."]
+    return "\n".join(lines)
 
 def filters_keyboard():
     return InlineKeyboardMarkup([
@@ -549,6 +581,24 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⚙️ تنظیم فیلترها\nیکی از گزینه‌ها را انتخاب کن:", reply_markup=filters_keyboard())
     elif data == "show_filters":
         await q.edit_message_text(filters_text(), reply_markup=filters_keyboard())
+    elif data == "menu_sources":
+        await q.edit_message_text(sources_text(), reply_markup=sources_keyboard())
+    elif data.startswith("source_toggle:"):
+        key = data.split(":", 1)[1]
+        if key not in SOURCE_LABELS:
+            await q.answer("منبع ناشناخته است.", show_alert=True)
+            return
+        settings = get_settings()
+        enabled = {x.strip() for x in settings.get("enabled_sources", DEFAULTS["enabled_sources"]).split(",") if x.strip()}
+        if key in enabled:
+            enabled.remove(key)
+            action = "خاموش شد"
+        else:
+            enabled.add(key)
+            action = "روشن شد"
+        set_settings({"enabled_sources": ",".join(k for k in SOURCE_LABELS if k in enabled)})
+        await q.answer(f"{SOURCE_LABELS[key]} {action}")
+        await q.edit_message_text(sources_text(), reply_markup=sources_keyboard())
     elif data == "latest":
         with db() as c:
             rows = c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 100").fetchall()
@@ -678,8 +728,14 @@ async def handle_filter_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop("awaiting_filter", None)
     await msg.reply_text("✅ فیلتر ذخیره شد.\n\n" + filters_text(), reply_markup=filters_keyboard())
 
+async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        await update.effective_message.reply_text("دسترسی ندارید.")
+        return
+    await update.effective_message.reply_text(sources_text(), reply_markup=sources_keyboard())
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("/start ثبت عضویت و دریافت آگهی جدید\n/latest آخرین ۱۰ آگهی\n/filters نمایش فیلترها\n/help راهنما")
+    await update.effective_message.reply_text("/start ثبت عضویت و دریافت آگهی جدید\n/latest آخرین ۱۰ آگهی\n/filters نمایش فیلترها\n/sources مدیریت منابع دریافت آگهی\n/help راهنما")
 
 def start_bot():
     global bot_loop, bot_app, bot_started
@@ -691,6 +747,7 @@ def start_bot():
         bot_app.add_handler(CommandHandler("start",cmd_start))
         bot_app.add_handler(CommandHandler("latest",cmd_latest))
         bot_app.add_handler(CommandHandler("filters",cmd_filters))
+        bot_app.add_handler(CommandHandler("sources",cmd_sources))
         bot_app.add_handler(CommandHandler("help",cmd_help))
         bot_app.add_handler(CallbackQueryHandler(handle_button))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_input))
