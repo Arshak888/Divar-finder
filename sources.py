@@ -10,7 +10,7 @@ from dataclasses import dataclass, asdict
 from hashlib import sha256
 import re
 from typing import Iterable, Protocol
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qs, unquote
 
 
 @dataclass
@@ -123,6 +123,10 @@ class PublicTelegramSource:
                 soup_results = BeautifulSoup(page.text, "html.parser")
                 for anchor in soup_results.select("a[href]"):
                     href = str(anchor.get("href", ""))
+                    parsed_href = urlparse(href)
+                    if parsed_href.path == "/url":
+                        href = parse_qs(parsed_href.query).get("q", [href])[0]
+                    href = unquote(href)
                     match = re.search(r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/(?:s/)?([A-Za-z0-9_]{5,64})(?:[/?#]|$)", href)
                     if match and match.group(1).lower() not in {"share", "proxy", "joinchat", "addstickers", "iv"}:
                         channel = match.group(1)
