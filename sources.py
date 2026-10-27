@@ -1,0 +1,90 @@
+"""Shared contracts for future multi-source real-estate listing adapters.
+
+The existing Divar integration remains in app.py. New sources should implement
+ListingSource.fetch() and return normalized records; this module intentionally
+does not scrape sites before their current public access path is verified.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict
+from hashlib import sha256
+import re
+from typing import Iterable, Protocol
+from urllib.parse import urlparse, urlunparse
+
+
+@dataclass
+class Listing:
+    source: str
+    id: str
+    title: str
+    url: str
+    price: str = ""
+    area: str = ""
+    bedrooms: str = ""
+    location: str = ""
+    created_at: str = ""
+    fingerprint: str = ""
+
+    def __post_init__(self):
+        self.source = (self.source or "unknown").strip().lower()
+        self.id = str(self.id or "").strip()
+        self.title = re.sub(r"\\s+", " ", str(self.title or "")).strip()
+        self.url = str(self.url or "").strip()
+        self.price = str(self.price or "").strip()
+        self.area = str(self.area or "").strip()
+        self.bedrooms = str(self.bedrooms or "").strip()
+        self.location = re.sub(r"\\s+", " ", str(self.location or "")).strip()
+        self.created_at = str(self.created_at or "").strip()
+        if not self.fingerprint:
+            self.fingerprint = cross_source_fingerprint(self.title, self.price, self.area, self.location)
+
+    def to_dict(self):
+        return asdict(self)
+
+
+class ListingSource(Protocol):
+    key: str
+
+    def fetch(self, search_context: dict) -> Iterable[Listing]:
+        """Return listings from one authorized and verified source."""
+        ...
+
+
+def canonical_url(url: str) -> str:
+    try:
+        parsed = urlparse(url.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return ""
+        return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", "", ""))
+    except (ValueError, AttributeError):
+        return ""
+
+
+def cross_source_fingerprint(title: str, price: str = "", area: str = "", location: str = "") -> str:
+    """Conservative fingerprint. Similarity is a hint, not proof of identity."""
+    normalized = lambda value: re.sub(r"[^\\w\\d]", "", str(value or "").casefold())
+    material = "|".join(normalized(x) for x in (title, price, area, location))
+    return sha256(material.encode("utf-8")).hexdigest()
+
+
+def deduplicate(listings: Iterable[Listing]) -> list[Listing]:
+    """Deduplicate exact source IDs/URLs and conservative normalized fingerprints."""
+    output, seen_ids, seen_urls, seen_fingerprints = [], set(), set(), set()
+    for item in listings:
+        source_id = (item.source, item.id) if item.id else None
+        url = canonical_url(item.url)
+        fp = item.fingerprint
+        if (source_id and source_id in seen_ids) or (url and url in seen_urls):
+            continue
+        enough_detail = bool(item.title and (item.price or item.area) and item.location)
+        if enough_detail and fp in seen_fingerprints:
+            continue
+        output.append(item)
+        if source_id:
+            seen_ids.add(source_id)
+        if url:
+            seen_urls.add(url)
+        if enough_detail:
+            seen_fingerprints.add(fp)
+    return output
