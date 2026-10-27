@@ -81,29 +81,92 @@ def parse_price(text):
     m = re.search(r"\d[\d,]*", t)
     return m.group(0).replace(",", "") if m else ""
 
+def divar_search_api_url(search_url):
+    """Translate a normal Divar search URL into the web-search JSON endpoint."""
+    parsed = urlparse(search_url)
+    if parsed.netloc.lower() == "api.divar.ir" and parsed.path.startswith("/v8/web-search/"):
+        return search_url
+    path = parsed.path
+    if not path.startswith("/s/"):
+        raise ValueError("آدرس باید صفحه جست‌وجوی دیوار با مسیر /s/ باشد.")
+    api_path = "/v8/web-search/" + path[len("/s/"):]
+    return "https://api.divar.ir" + api_path + (("?" + parsed.query) if parsed.query else "")
+
+
+def normalize_digits(value):
+    table = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    return str(value or "").translate(table)
+
+
+def extract_api_listings(payload, base_url):
+    """Parse Divar's web-search response (web_widgets.post_list)."""
+    widgets = payload.get("web_widgets", {}) if isinstance(payload, dict) else {}
+    cards = widgets.get("post_list", []) if isinstance(widgets, dict) else []
+    found, seen = [], set()
+    for card in cards:
+        data = card.get("data", {}) if isinstance(card, dict) else {}
+        if not isinstance(data, dict):
+            continue
+        token = str(data.get("token") or "")
+        action = data.get("action") or {}
+        payload_data = action.get("payload") or {} if isinstance(action, dict) else {}
+        web_info = payload_data.get("web_info") or {} if isinstance(payload_data, dict) else {}
+        token = token or str(web_info.get("token") or "")
+        if not token:
+            continue
+        href = "https://divar.ir/v/" + token
+        if token in seen:
+            continue
+        seen.add(token)
+        title = str(data.get("title") or "").strip()
+        descriptions = [
+            str(data.get(k) or "").strip()
+            for k in ("top_description_text", "middle_description_text", "bottom_description_text")
+        ]
+        descriptions = [x for x in descriptions if x]
+        detail = " · ".join(descriptions)
+        raw_text = " ".join([title, *descriptions])
+        price = ""
+        # API fields vary by category and may omit price for some ads.
+        for key in ("price", "price_text", "bottom_description_text"):
+            val = data.get(key)
+            if isinstance(val, (str, int, float)) and re.search(r"تومان|میلیارد|میلیون|توافقی", str(val)):
+                price = str(val).strip()
+                break
+        area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(raw_text))
+        area = area_match.group(1) if area_match else ""
+        location = str(web_info.get("district_persian") or web_info.get("district") or "").strip()
+        if not location:
+            location = str(data.get("subtitle") or "").strip()
+        found.append({
+            "id": token, "title": title or detail[:180], "price": price,
+            "area": area, "location": location[:100], "url": href
+        })
+    return found
+
+
 def extract_listings(html, base_url):
+    # Fallback parser retained for older HTML responses and fixtures.
     soup = BeautifulSoup(html, "html.parser")
     found, seen = [], set()
-    # Prefer structured metadata when Divar exposes it, then accessible result-card links.
     for node in soup.select('a[href*="/v/"]'):
         href = urljoin(base_url, node.get("href", ""))
-        if "/v/" not in urlparse(href).path or href in seen: continue
+        if "/v/" not in urlparse(href).path or href in seen:
+            continue
         seen.add(href)
-        text = " ".join(node.stripped_strings)
-        if not text: text = node.get("aria-label", "")
-        if not text: continue
+        text = " ".join(node.stripped_strings) or node.get("aria-label", "")
+        if not text:
+            continue
         title = text[:180].strip()
-        price_match = re.search(r"([\d,٬]+)\s*(?:تومان|میلیارد|میلیون)", text)
+        price_match = re.search(r"([\d,٬۰-۹]+)\s*(?:تومان|میلیارد|میلیون)", text)
         price = price_match.group(0) if price_match else ""
-        area_match = re.search(r"(\d{2,4})\s*متر", text)
+        area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(text))
         area = area_match.group(1) if area_match else ""
-        location = ""
         parts = [x.strip() for x in text.split("·") if x.strip()]
-        if len(parts) > 1: location = parts[-1][:100]
+        location = parts[-1][:100] if len(parts) > 1 else ""
         ident = re.search(r"/v/([^/?#]+)", href)
         lid = ident.group(1) if ident else hashlib.sha256(href.encode()).hexdigest()[:24]
         found.append({"id":lid,"title":title,"price":price,"area":area,"location":location,"url":href})
-    # If page has no result cards, fail loudly instead of pretending there are no new ads.
     return found
 
 def matches(item, s):
@@ -144,13 +207,30 @@ def poll_once():
     url = s.get("search_url","").strip()
     if not url.startswith("https://divar.ir/"):
         raise ValueError("آدرس جست‌وجو باید یک URL معتبر از divar.ir باشد.")
-    response = requests.get(url, headers={"User-Agent":USER_AGENT,"Accept-Language":"fa-IR,fa;q=0.9,en;q=0.5"}, timeout=15)
+    api_url = divar_search_api_url(url)
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.5",
+        "Referer": url if url.startswith("https://divar.ir/") else "https://divar.ir/",
+        "Origin": "https://divar.ir",
+    }
+    response = requests.get(api_url, headers=headers, timeout=20)
     if response.status_code in (401,403,429):
         raise RuntimeError(f"دیوار دسترسی را محدود کرده (HTTP {response.status_code}). CAPTCHA یا محدودیت را دور نزنید؛ بعداً دوباره بررسی کنید.")
     response.raise_for_status()
-    items = extract_listings(response.text, url)
+    items = []
+    content_type = response.headers.get("content-type", "").lower()
+    if "json" in content_type or response.text.lstrip().startswith("{"):
+        try:
+            items = extract_api_listings(response.json(), url)
+        except (ValueError, TypeError, AttributeError) as e:
+            raise RuntimeError(f"پاسخ API دیوار قابل پردازش نیست: {e}")
     if not items:
-        raise RuntimeError("از صفحه آگهی قابل استخراجی پیدا نشد؛ ممکن است ساختار دیوار تغییر کرده یا محتوای صفحه با JavaScript بارگذاری شود.")
+        # Compatibility fallback for responses that still contain server-rendered cards.
+        items = extract_listings(response.text, url)
+    if not items:
+        raise RuntimeError("API جست‌وجوی دیوار پاسخ داد اما آگهی قابل استخراجی پیدا نشد؛ ممکن است قالب پاسخ تغییر کرده یا فیلترهای URL نیاز به بررسی داشته باشند.")
     new_items = []
     with db() as c:
         for item in items:
