@@ -1,0 +1,12 @@
+services:
+  divar-finder:
+    build: .
+    container_name: divar-finder
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - divar_data:/data
+volumes:
+  divar_data:
