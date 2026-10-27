@@ -286,10 +286,11 @@ async def notify_new(item):
         try: await bot_app.bot.send_message(chat_id=chat, text=text, disable_web_page_preview=False)
         except Exception as e: print("Telegram send failed:", e)
 
-def poll_once():
+def poll_once(force=False):
     global last_error, last_check
     s = get_settings()
-    if s.get("enabled") != "1": return
+    # Manual checks pass force=True; scheduled polling respects the enabled setting.
+    if s.get("enabled") != "1" and not force: return
     url = s.get("search_url","").strip()
     if not url.startswith("https://divar.ir/"):
         raise ValueError("آدرس جست‌وجو باید یک URL معتبر از divar.ir باشد.")
@@ -316,15 +317,19 @@ def poll_once():
         items = []
     # The current website server-renders POST_ROW widgets into its HTML.
     if not items:
-        html_response = requests.get(url, headers=headers, timeout=25)
-        if html_response.status_code in (401, 403, 429):
-            raise RuntimeError(f"دیوار دسترسی صفحه را محدود کرده (HTTP {html_response.status_code}).")
-        html_response.raise_for_status()
-        items = extract_html_embedded_listings(html_response.text, url)
-        if not items:
-            items = extract_listings(html_response.text, url)
+        try:
+            html_response = requests.get(url, headers=headers, timeout=25)
+            if html_response.status_code in (401, 403, 429):
+                print(f"Divar source unavailable: HTTP {html_response.status_code}; continuing with other sources")
+            else:
+                html_response.raise_for_status()
+                items = extract_html_embedded_listings(html_response.text, url)
+                if not items:
+                    items = extract_listings(html_response.text, url)
+        except Exception as exc:
+            print("Divar source failed; continuing with other sources:", exc)
     if not items:
-        raise RuntimeError("صفحه جست‌وجوی دیوار دریافت شد، اما آگهی قابل استخراجی پیدا نشد؛ ساختار صفحه ممکن است تغییر کرده باشد.")
+        print("Divar source: listings_found=0; continuing with other sources")
     # Optional extra source: public Telegram channel previews configured by the operator.
     # Failure of this source must never break the existing Divar poll.
     telegram_items = []
@@ -549,7 +554,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "clear_memory_cancel":
         await q.edit_message_text("عملیات پاک‌کردن لغو شد.", reply_markup=main_keyboard())
     elif data == "check":
-        await q.edit_message_text("🔎 دارم دیوار را بررسی می‌کنم...")
+        await q.edit_message_text("🔎 دارم همه منابع را بررسی می‌کنم: دیوار، تلگرام، شیپور، کیلید، ایران‌فایل، ملک‌رادار و زومیلا...")
         try:
             await asyncio.to_thread(poll_once)
             await q.message.reply_text("✅ بررسی تمام شد.\n" + filters_text(), reply_markup=main_keyboard())
@@ -750,7 +755,7 @@ def save_settings(request: Request, search_url: str = Form(...), min_price: str 
 @app.post("/check")
 def check_now(request: Request):
     if not request.session.get("logged_in"): return RedirectResponse("/login",303)
-    try: poll_once()
+    try: poll_once(force=True)
     except Exception as e:
         global last_error
         last_error=str(e)
