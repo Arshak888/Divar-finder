@@ -345,6 +345,7 @@ def poll_once(force=False):
             print("Divar source: listings_found=0; continuing with other sources")
     # Optional extra source: public Telegram channel previews configured by the operator.
     # Failure of this source must never break the existing Divar poll.
+    telegram_items = []
     if "telegram" in enabled_sources:
         try:
             telegram_source = PublicTelegramSource()
@@ -358,7 +359,8 @@ def poll_once(force=False):
 
     else:
         print("Telegram source disabled in dashboard settings")
-    items.extend(telegram_items if "telegram" in enabled_sources else [])
+    if "telegram" in enabled_sources:
+        items.extend(telegram_items)
     # Each source is independently switchable in the dashboard.
     extra_sources = {
         "sheypoor": SheypoorSource(),
@@ -381,7 +383,7 @@ def poll_once(force=False):
             print(f"Source {source.key} failed; continuing:", exc)
     print("Poll filters:", {k: s.get(k) for k in
           ("max_price", "min_price", "min_area", "max_area", "bedrooms", "parking", "neighborhoods", "enabled")})
-    print(f"Poll: extracted={len(items)}; cap=1000; sources=Divar+public-Telegram+Sheypoor+Kilid+Iranfile+MelkRadar+Zoomila")
+    print(f"Poll: extracted={len(items)}; cap=1000; enabled_sources={','.join(sorted(enabled_sources))}")
     # Process up to 1000 listings when the source actually returns them.
     items = items[:1000]
     for sample in items[:8]:
