@@ -278,7 +278,7 @@ async def notify_new(item):
     if not bot_app: return
     with db() as c:
         chats = [r["chat_id"] for r in c.execute("SELECT chat_id FROM subscribers")]
-    source = item.get("source", "")
+    source = item.get("source") or "divar"
     price_num = parse_price(item.get("price", ""))
     unknown_telegram_price = source == "telegram" and not price_num
     if unknown_telegram_price:
