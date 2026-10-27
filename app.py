@@ -105,50 +105,75 @@ def normalize_digits(value):
     return str(value or "").translate(table)
 
 
+def _listing_from_widget(widget, base_url):
+    """Convert a Divar POST_ROW widget to the bot's normalized listing shape."""
+    data = widget.get("data", {}) if isinstance(widget, dict) else {}
+    if not isinstance(data, dict):
+        return None
+    action = data.get("action") or {}
+    payload_data = action.get("payload") or {} if isinstance(action, dict) else {}
+    web_info = payload_data.get("web_info") or {} if isinstance(payload_data, dict) else {}
+    token = str(data.get("token") or payload_data.get("token") or "").strip()
+    if not token:
+        return None
+    title = str(data.get("title") or web_info.get("title") or "").strip()
+    descriptions = [str(data.get(k) or "").strip() for k in
+                   ("top_description_text", "middle_description_text", "bottom_description_text")]
+    descriptions = [x for x in descriptions if x]
+    raw_text = " ".join([title, *descriptions])
+    price = ""
+    for key in ("price", "price_text", "middle_description_text", "bottom_description_text", "top_description_text"):
+        val = data.get(key)
+        if isinstance(val, (str, int, float)) and re.search(r"تومان|میلیارد|میلیون|توافقی", str(val)):
+            price = str(val).strip()
+            break
+    area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(raw_text))
+    location = str(web_info.get("district_persian") or web_info.get("district") or "").strip()
+    if not location:
+        location = str(data.get("bottom_description_text") or "").strip()
+    return {
+        "id": token, "title": title or "آگهی دیوار", "price": price,
+        "area": area_match.group(1) if area_match else "",
+        "location": location[:100], "url": "https://divar.ir/v/" + token
+    }
+
+
 def extract_api_listings(payload, base_url):
-    """Parse Divar's web-search response (web_widgets.post_list)."""
-    widgets = payload.get("web_widgets", {}) if isinstance(payload, dict) else {}
-    cards = widgets.get("post_list", []) if isinstance(widgets, dict) else []
+    """Parse supported JSON response shapes returned by Divar."""
     found, seen = [], set()
+    if not isinstance(payload, dict):
+        return found
+    widgets = payload.get("web_widgets", {})
+    cards = widgets.get("post_list", []) if isinstance(widgets, dict) else []
+    if not cards and isinstance(payload.get("widget_list"), list):
+        cards = [w for w in payload["widget_list"]
+                 if isinstance(w, dict) and w.get("widget_type") == "POST_ROW"]
     for card in cards:
-        data = card.get("data", {}) if isinstance(card, dict) else {}
-        if not isinstance(data, dict):
+        item = _listing_from_widget(card, base_url)
+        if item and item["id"] not in seen:
+            seen.add(item["id"])
+            found.append(item)
+    return found
+
+
+def extract_html_embedded_listings(source, base_url):
+    """Extract server-rendered POST_ROW JSON objects embedded in Divar's HTML."""
+    import html as html_lib
+    source = html_lib.unescape(source or "")
+    decoder = json.JSONDecoder()
+    found, seen = [], set()
+    for match in re.finditer(r'"widget_type"\s*:\s*"POST_ROW"', source):
+        start = match.start() - 1
+        if start < 0 or source[start] != "{":
             continue
-        token = str(data.get("token") or "")
-        action = data.get("action") or {}
-        payload_data = action.get("payload") or {} if isinstance(action, dict) else {}
-        web_info = payload_data.get("web_info") or {} if isinstance(payload_data, dict) else {}
-        token = token or str(web_info.get("token") or "")
-        if not token:
+        try:
+            widget, _ = decoder.raw_decode(source[start:])
+        except (json.JSONDecodeError, ValueError):
             continue
-        href = "https://divar.ir/v/" + token
-        if token in seen:
-            continue
-        seen.add(token)
-        title = str(data.get("title") or "").strip()
-        descriptions = [
-            str(data.get(k) or "").strip()
-            for k in ("top_description_text", "middle_description_text", "bottom_description_text")
-        ]
-        descriptions = [x for x in descriptions if x]
-        detail = " · ".join(descriptions)
-        raw_text = " ".join([title, *descriptions])
-        price = ""
-        # API fields vary by category and may omit price for some ads.
-        for key in ("price", "price_text", "bottom_description_text"):
-            val = data.get(key)
-            if isinstance(val, (str, int, float)) and re.search(r"تومان|میلیارد|میلیون|توافقی", str(val)):
-                price = str(val).strip()
-                break
-        area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(raw_text))
-        area = area_match.group(1) if area_match else ""
-        location = str(web_info.get("district_persian") or web_info.get("district") or "").strip()
-        if not location:
-            location = str(data.get("subtitle") or "").strip()
-        found.append({
-            "id": token, "title": title or detail[:180], "price": price,
-            "area": area, "location": location[:100], "url": href
-        })
+        item = _listing_from_widget(widget, base_url)
+        if item and item["id"] not in seen:
+            seen.add(item["id"])
+            found.append(item)
     return found
 
 
@@ -214,30 +239,38 @@ def poll_once():
     url = s.get("search_url","").strip()
     if not url.startswith("https://divar.ir/"):
         raise ValueError("آدرس جست‌وجو باید یک URL معتبر از divar.ir باشد.")
-    api_url = divar_search_api_url(url)
     headers = {
         "User-Agent": USER_AGENT,
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "text/html,application/json,application/xhtml+xml,*/*",
         "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.5",
-        "Referer": url if url.startswith("https://divar.ir/") else "https://divar.ir/",
+        "Referer": "https://divar.ir/",
         "Origin": "https://divar.ir",
     }
-    response = requests.get(api_url, headers=headers, timeout=20)
-    if response.status_code in (401,403,429):
-        raise RuntimeError(f"دیوار دسترسی را محدود کرده (HTTP {response.status_code}). CAPTCHA یا محدودیت را دور نزنید؛ بعداً دوباره بررسی کنید.")
-    response.raise_for_status()
     items = []
-    content_type = response.headers.get("content-type", "").lower()
-    if "json" in content_type or response.text.lstrip().startswith("{"):
-        try:
-            items = extract_api_listings(response.json(), url)
-        except (ValueError, TypeError, AttributeError) as e:
-            raise RuntimeError(f"پاسخ API دیوار قابل پردازش نیست: {e}")
+    # First try the public search endpoint; some responses contain a blocking widget.
+    try:
+        api_url = divar_search_api_url(url)
+        api_response = requests.get(api_url, headers=headers, timeout=20)
+        if api_response.status_code not in (401, 403, 429):
+            api_response.raise_for_status()
+            if "json" in api_response.headers.get("content-type", "").lower() or api_response.text.lstrip().startswith("{"):
+                try:
+                    items = extract_api_listings(api_response.json(), url)
+                except (ValueError, TypeError, AttributeError):
+                    items = []
+    except (requests.RequestException, ValueError):
+        items = []
+    # The current website server-renders POST_ROW widgets into its HTML.
     if not items:
-        # Compatibility fallback for responses that still contain server-rendered cards.
-        items = extract_listings(response.text, url)
+        html_response = requests.get(url, headers=headers, timeout=25)
+        if html_response.status_code in (401, 403, 429):
+            raise RuntimeError(f"دیوار دسترسی صفحه را محدود کرده (HTTP {html_response.status_code}).")
+        html_response.raise_for_status()
+        items = extract_html_embedded_listings(html_response.text, url)
+        if not items:
+            items = extract_listings(html_response.text, url)
     if not items:
-        raise RuntimeError("API جست‌وجوی دیوار پاسخ داد اما آگهی قابل استخراجی پیدا نشد؛ ممکن است قالب پاسخ تغییر کرده یا فیلترهای URL نیاز به بررسی داشته باشند.")
+        raise RuntimeError("صفحه جست‌وجوی دیوار دریافت شد، اما آگهی قابل استخراجی پیدا نشد؛ ساختار صفحه ممکن است تغییر کرده باشد.")
     new_items = []
     with db() as c:
         for item in items:
