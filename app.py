@@ -458,7 +458,11 @@ SHIRAZ_NEIGHBORHOODS_UPDATED_AT = 0
 def refresh_shiraz_neighborhoods(force=False):
     """Load Divar's own district labels; use fallback if the official API is unavailable."""
     global SHIRAZ_NEIGHBORHOODS, SHIRAZ_NEIGHBORHOODS_UPDATED_AT
-    api_key = os.getenv("DIVAR_API_KEY", "").strip()
+    # Prefer the key saved securely through the authenticated dashboard; environment variable remains a fallback.
+    try:
+        api_key = (get_settings().get("divar_api_key") or os.getenv("DIVAR_API_KEY", "")).strip()
+    except Exception:
+        api_key = os.getenv("DIVAR_API_KEY", "").strip()
     now = time.time()
     if not api_key:
         return SHIRAZ_NEIGHBORHOODS
@@ -840,6 +844,13 @@ def home(request: Request):
     body=f"""<div class="top"><h1>🏠 دیوار فایندر</h1><a href="/logout">خروج</a></div>
     <p class="muted">پنل فارسی پایش آگهی‌های خرید خانه در شیراز</p>
     <div class="card"><h2>وضعیت سرویس</h2>{status}<p>آخرین بررسی: {esc(last_check or 'هنوز اجرا نشده')} · کل آگهی‌های ذخیره‌شده: {total} · کاربران تلگرام: {subs}</p><p class="muted">فاصله بررسی حداقل ۱۵ ثانیه است. سرعت واقعی به دسترسی و ساختار صفحه دیوار بستگی دارد؛ ارسال کاملاً آنی تضمین‌شدنی نیست.</p><form method="post" action="/check"><button>بررسی همین الان</button></form></div>
+    <div class="card"><h2>🔑 اتصال API رسمی دیوار</h2>
+    <p class="muted">کلید API کنار را اینجا وارد کن؛ نیازی به ویرایش فایل‌های سرور نیست. کلید در دیتابیس تنظیمات برنامه ذخیره می‌شود و در صفحه نمایش داده نمی‌شود.</p>
+    <form method="post" action="/divar-api-key">
+    <label>کلید API دیوار</label><input name="divar_api_key" type="password" autocomplete="new-password" placeholder="{ 'کلید ثبت شده است؛ برای جایگزینی وارد کن' if s.get('divar_api_key') else 'کلید API را وارد کن' }">
+    <div class="grid"><button type="submit">ذخیره و آزمایش اتصال</button><button type="submit" name="clear_key" value="1" formnovalidate onclick="return confirm('کلید ذخیره‌شده حذف شود؟')">حذف کلید</button></div>
+    <p class="muted">{'کلید ذخیره شده است.' if s.get('divar_api_key') else 'هنوز کلیدی از طریق پنل ذخیره نشده است.'} برای بارگذاری مجدد فهرست محله‌ها، پس از ذخیره اتصال را آزمایش کن.</p>
+    </form></div>
     <div class="card"><h2>تنظیمات جست‌وجو</h2><form method="post" action="/settings">
     <label>آدرس صفحه جست‌وجوی دیوار</label><input name="search_url" type="url" required value="{esc(s['search_url'])}" placeholder="https://divar.ir/s/...">
     <div class="grid"><div><label>حداقل قیمت (تومان)</label><input name="min_price" type="number" min="0" value="{esc(s['min_price'])}"></div><div><label>حداکثر قیمت (تومان)</label><input name="max_price" type="number" min="0" value="{esc(s['max_price'])}"></div><div><label>حداقل متراژ</label><input name="min_area" type="number" min="0" value="{esc(s['min_area'])}"></div><div><label>حداکثر متراژ</label><input name="max_area" type="number" min="0" value="{esc(s['max_area'])}"></div><div><label>تعداد اتاق خواب</label><select name="bedrooms"><option value="">همه</option>{''.join(f'<option value="{n}" {"selected" if s["bedrooms"]==str(n) else ""}>{n} اتاق</option>' for n in range(0,6))}</select></div><div><label>پارکینگ</label><select name="parking">{''.join(f'<option value="{v}" {"selected" if s["parking"]==v else ""}>{t}</option>' for v,t in [('any','مهم نیست'),('yes','حتماً داشته باشد'),('no','بدون پارکینگ')])}</select></div><div><label>فاصله بررسی (ثانیه، حداقل ۱۵)</label><input name="interval" type="number" min="15" max="3600" value="{esc(s['interval'])}"></div><div><label>پایش آگهی‌ها</label><select name="enabled"><option value="1" {"selected" if s["enabled"]=="1" else ""}>فعال</option><option value="0" {"selected" if s["enabled"]!="1" else ""}>متوقف</option></select></div></div>
@@ -882,6 +893,30 @@ def save_settings(request: Request, search_url: str = Form(...), min_price: str 
     vals={"search_url":search_url,"min_price":min_price,"max_price":max_price,"min_area":min_area,"max_area":max_area,"bedrooms":bedrooms,"parking":parking,"interval":interval,"enabled":"1" if enabled=="1" else "0","neighborhoods":neighborhoods,"enabled_sources":",".join(chosen_sources)}
     set_settings(vals)
     return RedirectResponse("/",303)
+
+@app.post("/divar-api-key")
+def save_divar_api_key(request: Request, divar_api_key: str = Form(""), clear_key: str = Form("")):
+    global SHIRAZ_NEIGHBORHOODS_UPDATED_AT
+    if not request.session.get("logged_in"):
+        return RedirectResponse("/login", 303)
+    if clear_key == "1":
+        set_settings({"divar_api_key": ""})
+        SHIRAZ_NEIGHBORHOODS_UPDATED_AT = 0
+        return RedirectResponse("/", 303)
+    key = divar_api_key.strip()
+    if not key:
+        return PlainTextResponse("برای ذخیره کلید، مقدار آن را وارد کن. برای حذف از دکمه حذف کلید استفاده کن.", 400)
+    # Keep secrets out of logs and responses.
+    set_settings({"divar_api_key": key})
+    SHIRAZ_NEIGHBORHOODS_UPDATED_AT = 0
+    districts = refresh_shiraz_neighborhoods(force=True)
+    if SHIRAZ_NEIGHBORHOODS_UPDATED_AT:
+        print(f"Divar official districts loaded: {len(districts)}")
+        return RedirectResponse("/", 303)
+    return PlainTextResponse(
+        "کلید ذخیره شد، اما دریافت فهرست محله‌ها موفق نبود. لاگ سرویس را بررسی کن؛ ممکن است کلید دسترسی لازم نداشته باشد یا API موقتاً در دسترس نباشد. کلید در پاسخ نمایش داده نمی‌شود.",
+        502
+    )
 
 @app.post("/check")
 def check_now(request: Request):
