@@ -329,7 +329,9 @@ def poll_once():
     # Failure of this source must never break the existing Divar poll.
     telegram_items = []
     try:
-        telegram_items = [x.to_dict() for x in PublicTelegramSource().fetch(s)]
+        telegram_source = PublicTelegramSource()
+        telegram_items = [x.to_dict() for x in telegram_source.fetch(s)]
+        print(f"Telegram source: channels_scanned={getattr(telegram_source, 'channels_scanned', 'unknown')}; listings_found={len(telegram_items)}")
         for item in telegram_items:
             item["id"] = "telegram:" + item["id"]
             item["source"] = "telegram"
@@ -338,9 +340,9 @@ def poll_once():
     items.extend(telegram_items)
     print("Poll filters:", {k: s.get(k) for k in
           ("max_price", "min_price", "min_area", "max_area", "bedrooms", "parking", "neighborhoods", "enabled")})
-    print(f"Poll: extracted={len(items)}; source=Divar")
-    # Process up to 100 cards when the fetched Divar response contains them.
-    items = items[:100]
+    print(f"Poll: extracted={len(items)}; cap=1000; sources=Divar+public-Telegram")
+    # Process up to 1000 listings when the source actually returns them.
+    items = items[:1000]
     for sample in items[:8]:
         print("Poll sample:", repr(sample.get("title", "")[:70]),
               "price=", repr(sample.get("price", "")),
@@ -754,6 +756,6 @@ def clear_memory(request: Request):
 @app.get("/export")
 def export(request: Request):
     if not request.session.get("logged_in"): return RedirectResponse("/login",303)
-    with db() as c: rows=[dict(r) for r in c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 500").fetchall()]
+    with db() as c: rows=[dict(r) for r in c.execute("SELECT * FROM listings ORDER BY seen_at DESC LIMIT 1000").fetchall()]
     return HTMLResponse("<pre>"+esc(json.dumps(rows,ensure_ascii=False,indent=2))+"</pre>")
 
