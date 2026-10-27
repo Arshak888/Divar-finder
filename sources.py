@@ -163,7 +163,7 @@ class PublicTelegramSource:
                     url = "https://t.me/" + post_id
                     dt = post.select_one("time[datetime]")
                     created_at = str(dt.get("datetime", "")).strip() if dt else ""
-                    price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|\d+(?:\.\d+)?\s*میلیارد)", title)
+                    price_match = re.search(r"([\d۰-۹٠-٩,.٬]+\s*(?:میلیارد|میلیون)?\s*تومان|[\d۰-۹٠-٩]+(?:[.,٫]\d+)?\s*میلیارد)", title)
                     area_match = re.search(r"(\d{2,4})\s*متر", normalize_digits(title))
                     location_match = re.search(r"(?:محله|منطقه|محدوده)\s*[:：-]?\s*([^،\n]+)", title)
                     output.append(Listing(source="telegram", id=post_id, title=title[:500], url=url,
