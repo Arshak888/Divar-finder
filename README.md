@@ -15,14 +15,32 @@ Divar does not provide a generally available official public real-estate listing
 - Docker Compose deployment
 - Dashboard protected by an admin password; Telegram commands restricted to configured chat IDs
 
-## Quick install
-1. Copy `.env.example` to `.env` and set `ADMIN_PASSWORD`. The bot token and allowed Telegram admin IDs can also be configured later from the authenticated dashboard.
-2. Set a strong `SECRET_KEY` and `BASE_URL` if applicable.
-3. Run `docker compose up -d --build`.
-4. Open `http://YOUR_SERVER_IP:9000`, sign in with the admin password, and configure the Divar search URL and filters.
-5. In the dashboard's **تنظیمات ربات تلگرام** card, save the bot token and numeric Telegram admin IDs. Send `/start` to the bot after polling starts.
+## Quick install (copy and paste)
 
-Use HTTPS via a reverse proxy before exposing the dashboard publicly. Never commit `.env`, API keys, or your bot token to GitHub.
+On a fresh Ubuntu/Debian server with Docker Compose installed, copy and run this block. It clones the project, creates a secure dashboard password and secret key, then starts the panel on port **9000**.
+
+```bash
+git clone https://github.com/Arshak888/Divar-finder.git
+cd Divar-finder
+cp .env.example .env
+python3 - <<'PY'
+from pathlib import Path
+import secrets
+p = Path(".env")
+s = p.read_text()
+password = secrets.token_urlsafe(16)
+secret = secrets.token_urlsafe(48)
+s = s.replace("ADMIN_PASSWORD=please_set_a_long_random_password", f"ADMIN_PASSWORD={password}")
+s = s.replace("SECRET_KEY=replace_with_a_long_random_secret", f"SECRET_KEY={secret}")
+p.write_text(s)
+print("\nDashboard login password (save this now):", password)
+PY
+docker compose up -d --build
+```
+
+When the build finishes, open `http://YOUR_SERVER_IP:9000` and sign in using the password printed by the script. In the dashboard, open **تنظیمات ربات تلگرام** to enter the bot token and numeric Telegram admin IDs, then save/restart the bot. You can also edit server settings with `nano .env` and apply them using `docker compose up -d --build`.
+
+**Requirements:** Git, Python 3, and Docker with the Docker Compose plugin must already be installed. Allow inbound TCP port 9000 in your server firewall/security group. For public access, use HTTPS through a reverse proxy. Never commit `.env` or share the generated password/token.
 
 ## Official Divar neighborhood API (Kenar)
 The Telegram neighborhood selector can load the current district labels from Divar's official Kenar API.
