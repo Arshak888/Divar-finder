@@ -1088,7 +1088,7 @@ def save_telegram_settings(request: Request, bot_token: str = Form(""), allowed_
     if not request.session.get("logged_in"):
         return RedirectResponse("/login", 303)
     values = {"allowed_telegram_ids": ",".join(
-        dict.fromkeys(x.strip() for x in re.split(r"[,;\\s]+", allowed_telegram_ids) if x.strip())
+        dict.fromkeys(x.strip() for x in re.split(r"[,;\s]+", allowed_telegram_ids) if x.strip())
     )}
     token = bot_token.strip()
     if token:
