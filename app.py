@@ -32,6 +32,7 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, https_only=BASE_URL
 stop_event = threading.Event()
 worker_started = False
 bot_started = False
+bot_restart_event = threading.Event()
 last_error = ""
 last_check = ""
 bot_loop = None
@@ -70,10 +71,24 @@ def set_settings(values):
         for k,v in values.items():
             c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
 
+def current_bot_token():
+    try:
+        return (get_settings().get("bot_token") or BOT_TOKEN).strip()
+    except Exception:
+        return BOT_TOKEN
+
+def current_allowed_ids():
+    try:
+        raw = get_settings().get("allowed_telegram_ids") or os.getenv("ALLOWED_TELEGRAM_IDS", "")
+    except Exception:
+        raw = os.getenv("ALLOWED_TELEGRAM_IDS", "")
+    return {x.strip() for x in str(raw).replace("\\n", ",").replace("\\r", ",").replace(";", ",").split(",") if x.strip()}
+
 def allowed(update):
     user = update.effective_user
     chat = update.effective_chat
-    return bool(user and chat and (not ALLOWED_IDS or str(user.id) in ALLOWED_IDS or str(chat.id) in ALLOWED_IDS))
+    ids = current_allowed_ids()
+    return bool(user and chat and (not ids or str(user.id) in ids or str(chat.id) in ids))
 
 def money(value):
     try: return f"{int(value):,} تومان"
@@ -921,26 +936,58 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def start_bot():
     global bot_loop, bot_app, bot_started
-    if not BOT_TOKEN: print("BOT_TOKEN missing; Telegram bot disabled."); return
     async def runner():
         global bot_loop, bot_app, bot_started
-        bot_loop=asyncio.get_running_loop()
-        bot_app=Application.builder().token(BOT_TOKEN).build()
-        bot_app.add_handler(CommandHandler("start",cmd_start))
-        bot_app.add_handler(CommandHandler("latest",cmd_latest))
-        bot_app.add_handler(CommandHandler("filters",cmd_filters))
-        bot_app.add_handler(CommandHandler("sources",cmd_sources))
-        bot_app.add_handler(CommandHandler("help",cmd_help))
-        bot_app.add_handler(CallbackQueryHandler(handle_button))
-        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_input))
-        await bot_app.initialize()
-        await bot_app.start()
-        await bot_app.updater.start_polling(drop_pending_updates=False)
-        bot_started=True
-        while not stop_event.is_set(): await asyncio.sleep(1)
-        await bot_app.updater.stop(); await bot_app.stop(); await bot_app.shutdown()
-    try: asyncio.run(runner())
-    except Exception as e: print("Telegram bot failed:", repr(e))
+        bot_loop = asyncio.get_running_loop()
+        while not stop_event.is_set():
+            token = current_bot_token()
+            if not token:
+                bot_started = False
+                await asyncio.sleep(2)
+                continue
+            try:
+                bot_app = Application.builder().token(token).build()
+                bot_app.add_handler(CommandHandler("start",cmd_start))
+                bot_app.add_handler(CommandHandler("latest",cmd_latest))
+                bot_app.add_handler(CommandHandler("filters",cmd_filters))
+                bot_app.add_handler(CommandHandler("sources",cmd_sources))
+                bot_app.add_handler(CommandHandler("help",cmd_help))
+                bot_app.add_handler(CallbackQueryHandler(handle_button))
+                bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_input))
+                await bot_app.initialize()
+                await bot_app.start()
+                await bot_app.updater.start_polling(drop_pending_updates=False)
+                bot_started = True
+                print("Telegram bot polling started.")
+                while not stop_event.is_set() and not bot_restart_event.is_set():
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                print("Telegram bot failed:", repr(e))
+                await asyncio.sleep(2)
+            finally:
+                bot_started = False
+                try:
+                    if bot_app and bot_app.updater and bot_app.updater.running:
+                        await bot_app.updater.stop()
+                except Exception as e:
+                    print("Telegram updater stop:", repr(e))
+                try:
+                    if bot_app and bot_app.running:
+                        await bot_app.stop()
+                except Exception as e:
+                    print("Telegram app stop:", repr(e))
+                try:
+                    if bot_app:
+                        await bot_app.shutdown()
+                except Exception as e:
+                    print("Telegram app shutdown:", repr(e))
+                bot_app = None
+                bot_restart_event.clear()
+    try:
+        asyncio.run(runner())
+    except Exception as e:
+        bot_started = False
+        print("Telegram bot runner failed:", repr(e))
 
 def esc(v): 
     import html
@@ -963,7 +1010,7 @@ def startup():
 def shutdown(): stop_event.set()
 
 @app.get("/health")
-def health(): return {"ok":True,"bot_configured":bool(BOT_TOKEN),"bot_started":bot_started,"last_check":last_check,"error":last_error}
+def health(): return {"ok":True,"bot_configured":bool(current_bot_token()),"bot_started":bot_started,"last_check":last_check,"error":last_error}
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -978,6 +1025,14 @@ def home(request: Request):
     body=f"""<div class="top"><h1>🏠 دیوار فایندر</h1><a href="/logout">خروج</a></div>
     <p class="muted">پنل فارسی پایش آگهی‌های خرید خانه در شیراز</p>
     <div class="card"><h2>وضعیت سرویس</h2>{status}<p>آخرین بررسی: {esc(last_check or 'هنوز اجرا نشده')} · کل آگهی‌های ذخیره‌شده: {total} · کاربران تلگرام: {subs}</p><p class="muted">فاصله بررسی حداقل ۱۵ ثانیه است. سرعت واقعی به دسترسی و ساختار صفحه دیوار بستگی دارد؛ ارسال کاملاً آنی تضمین‌شدنی نیست.</p><form method="post" action="/check"><button>بررسی همین الان</button></form></div>
+    <div class="card"><h2>🤖 تنظیمات ربات تلگرام</h2>
+    <p class="muted">توکن در دیتابیس تنظیمات ذخیره می‌شود و در صفحه نمایش داده نمی‌شود. برای حفظ توکن فعلی، کادر توکن را خالی بگذار. تغییر توکن باعث راه‌اندازی مجدد polling ربات می‌شود.</p>
+    <form method="post" action="/telegram-settings">
+    <label>توکن ربات تلگرام</label><input name="bot_token" type="password" autocomplete="new-password" placeholder="{ 'توکن در تنظیمات ذخیره شده؛ برای جایگزینی وارد کن' if s.get('bot_token') or BOT_TOKEN else 'توکن دریافتی از BotFather' }">
+    <label>شناسه ادمین‌های تلگرام (هر شناسه در یک خط یا با ویرگول)</label><textarea name="allowed_telegram_ids" rows="3" placeholder="123456789&#10;987654321">{esc(s.get('allowed_telegram_ids') or os.getenv('ALLOWED_TELEGRAM_IDS','').replace(',', '\\n'))}</textarea>
+    <div class="grid"><button type="submit">ذخیره تنظیمات ربات</button><button type="submit" name="restart_bot" value="1">ذخیره و راه‌اندازی مجدد ربات</button></div>
+    <p class="muted">وضعیت polling: {'فعال' if bot_started else ('توکن تنظیم شده، در حال اتصال یا بررسی خطا' if current_bot_token() else 'توکن تنظیم نشده')}</p>
+    </form></div>
     <div class="card"><h2>🔑 اتصال API رسمی دیوار</h2>
     <p class="muted">کلید API کنار را اینجا وارد کن؛ نیازی به ویرایش فایل‌های سرور نیست. کلید در دیتابیس تنظیمات برنامه ذخیره می‌شود و در صفحه نمایش داده نمی‌شود.</p>
     <form method="post" action="/divar-api-key">
@@ -1027,6 +1082,23 @@ def save_settings(request: Request, search_url: str = Form(...), min_price: str 
     vals={"search_url":search_url,"min_price":min_price,"max_price":max_price,"min_area":min_area,"max_area":max_area,"bedrooms":bedrooms,"parking":parking,"interval":interval,"enabled":"1" if enabled=="1" else "0","neighborhoods":neighborhoods,"enabled_sources":",".join(chosen_sources)}
     set_settings(vals)
     return RedirectResponse("/",303)
+
+@app.post("/telegram-settings")
+def save_telegram_settings(request: Request, bot_token: str = Form(""), allowed_telegram_ids: str = Form(""), restart_bot: str = Form("")):
+    if not request.session.get("logged_in"):
+        return RedirectResponse("/login", 303)
+    values = {"allowed_telegram_ids": ",".join(
+        dict.fromkeys(x.strip() for x in re.split(r"[,;\\s]+", allowed_telegram_ids) if x.strip())
+    )}
+    token = bot_token.strip()
+    if token:
+        values["bot_token"] = token
+    set_settings(values)
+    # Re-read settings in the bot loop. Signal a safe polling restart only when
+    # the token was changed or the operator explicitly requested a restart.
+    if token or restart_bot == "1":
+        bot_restart_event.set()
+    return RedirectResponse("/", 303)
 
 @app.post("/divar-api-key")
 def save_divar_api_key(request: Request, divar_api_key: str = Form(""), clear_key: str = Form("")):
