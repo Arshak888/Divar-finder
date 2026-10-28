@@ -16,11 +16,11 @@ Divar does not provide a generally available official public real-estate listing
 - Dashboard protected by an admin password; Telegram commands restricted to configured chat IDs
 
 ## Quick install
-1. Copy `.env.example` to `.env` and set `BOT_TOKEN`, `ADMIN_PASSWORD`, and `ALLOWED_TELEGRAM_IDS`.
+1. Copy `.env.example` to `.env` and set `ADMIN_PASSWORD`. The bot token and allowed Telegram admin IDs can also be configured later from the authenticated dashboard.
 2. Set a strong `SECRET_KEY` and `BASE_URL` if applicable.
 3. Run `docker compose up -d --build`.
-4. Open `http://YOUR_SERVER_IP:8080`, sign in with the admin password, and configure the Divar search URL and filters.
-5. Send `/start` to your Telegram bot. Add your numeric Telegram user/chat ID to `ALLOWED_TELEGRAM_IDS`.
+4. Open `http://YOUR_SERVER_IP:9000`, sign in with the admin password, and configure the Divar search URL and filters.
+5. In the dashboard's **تنظیمات ربات تلگرام** card, save the bot token and numeric Telegram admin IDs. Send `/start` to the bot after polling starts.
 
 Use HTTPS via a reverse proxy before exposing the dashboard publicly. Never commit `.env`, API keys, or your bot token to GitHub.
 
