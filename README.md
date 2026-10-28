@@ -15,32 +15,24 @@ Divar does not provide a generally available official public real-estate listing
 - Docker Compose deployment
 - Dashboard protected by an admin password; Telegram commands restricted to configured chat IDs
 
-## Quick install (copy and paste)
+## Quick install (one command)
 
-On a fresh Ubuntu/Debian server with Docker Compose installed, copy and run this block. It clones the project, creates a secure dashboard password and secret key, then starts the panel on port **9000**.
+On a fresh **Ubuntu/Debian** server, run this one-liner as a user with `sudo` access. It installs the prerequisites and Docker/Compose if needed, downloads the project, asks you to enter and confirm the dashboard password (it is not echoed on screen), saves it in `.env`, then builds and starts the app on port **9000**.
 
 ```bash
-git clone https://github.com/Arshak888/Divar-finder.git
-cd Divar-finder
-cp .env.example .env
-python3 - <<'PY'
-from pathlib import Path
-import secrets
-p = Path(".env")
-s = p.read_text()
-password = secrets.token_urlsafe(16)
-secret = secrets.token_urlsafe(48)
-s = s.replace("ADMIN_PASSWORD=please_set_a_long_random_password", f"ADMIN_PASSWORD={password}")
-s = s.replace("SECRET_KEY=replace_with_a_long_random_secret", f"SECRET_KEY={secret}")
-p.write_text(s)
-print("\nDashboard login password (save this now):", password)
-PY
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/Arshak888/Divar-finder/main/install.sh -o /tmp/divar-finder-install.sh && sudo bash /tmp/divar-finder-install.sh
 ```
 
-When the build finishes, open `http://YOUR_SERVER_IP:9000` and sign in using the password printed by the script. In the dashboard, open **تنظیمات ربات تلگرام** to enter the bot token and numeric Telegram admin IDs, then save/restart the bot. You can also edit server settings with `nano .env` and apply them using `docker compose up -d --build`.
+After installation, open `http://YOUR_SERVER_IP:9000`. In the dashboard, use **تنظیمات ربات تلگرام** to set the bot token and numeric Telegram admin IDs.
 
-**Requirements:** Git, Python 3, and Docker with the Docker Compose plugin must already be installed. Allow inbound TCP port 9000 in your server firewall/security group. For public access, use HTTPS through a reverse proxy. Never commit `.env` or share the generated password/token.
+The installer uses Docker's convenience install script if Docker/Compose are missing. Docker documents that this method requires root/sudo and is intended primarily for development/testing; for production servers, review the official [Docker Engine installation instructions](https://docs.docker.com/engine/install/). Open inbound TCP port 9000 in the server/provider firewall if needed. The installer is for Ubuntu/Debian and does not configure HTTPS or a domain automatically.
+
+To see logs later:
+```bash
+cd /opt/Divar-finder && sudo docker compose logs --tail=100
+```
+
+Never commit `.env`, the dashboard password, API keys, or the Telegram bot token to GitHub.
 
 ## Official Divar neighborhood API (Kenar)
 The Telegram neighborhood selector can load the current district labels from Divar's official Kenar API.
